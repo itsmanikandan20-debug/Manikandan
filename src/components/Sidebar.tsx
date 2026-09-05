@@ -1,8 +1,17 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutGrid, GitCompareArrows, History, ScanSearch, Sparkles } from "lucide-react";
+import {
+  LayoutGrid,
+  GitCompareArrows,
+  History,
+  ScanSearch,
+  Sparkles,
+  CheckCircle2,
+  AlertCircle,
+} from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutGrid },
@@ -13,6 +22,14 @@ const navItems = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const [configured, setConfigured] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    fetch("/api/status")
+      .then((res) => res.json())
+      .then((data) => setConfigured(Boolean(data.configured)))
+      .catch(() => setConfigured(false));
+  }, []);
 
   return (
     <aside className="fixed inset-y-0 left-0 z-20 hidden w-64 flex-col border-r border-border bg-white lg:flex">
@@ -47,12 +64,34 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="mx-3 mb-5 rounded-xl border border-violet-100 bg-violet-50 p-4">
-        <p className="text-sm font-medium text-violet-800">Connect live data</p>
-        <p className="mt-1 text-xs leading-relaxed text-violet-700/80">
-          This build uses mock results. See the setup guide to wire up real
-          vision and search APIs.
-        </p>
+      <div
+        className={`mx-3 mb-5 rounded-xl border p-4 ${
+          configured ? "border-emerald-100 bg-emerald-50" : "border-violet-100 bg-violet-50"
+        }`}
+      >
+        {configured === null ? (
+          <p className="text-sm font-medium text-ink-muted">Checking setup…</p>
+        ) : configured ? (
+          <>
+            <p className="flex items-center gap-1.5 text-sm font-medium text-emerald-800">
+              <CheckCircle2 className="h-4 w-4" />
+              Real analysis is live
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-emerald-700/80">
+              Uploads are analyzed with Claude Vision and a real reverse-image search.
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="flex items-center gap-1.5 text-sm font-medium text-violet-800">
+              <AlertCircle className="h-4 w-4" />
+              API keys needed
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-violet-700/80">
+              Add your keys to .env.local to enable real results. See README.md.
+            </p>
+          </>
+        )}
       </div>
     </aside>
   );

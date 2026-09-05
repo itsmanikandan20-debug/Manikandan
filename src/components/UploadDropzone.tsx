@@ -2,32 +2,62 @@
 
 import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { UploadCloud, ImageUp, Loader2 } from "lucide-react";
+import { UploadCloud, ImageUp, Loader2, AlertTriangle } from "lucide-react";
+import { saveLastSearch, appendHistory } from "@/lib/search-store";
+import type { SearchRecord } from "@/lib/types";
 
-type Phase = "idle" | "dragging" | "selected" | "analyzing";
+type Phase = "idle" | "dragging" | "selected" | "analyzing" | "error";
 
 export function UploadDropzone() {
   const [phase, setPhase] = useState<Phase>("idle");
+  const [file, setFile] = useState<File | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
 
   const handleFiles = useCallback((files: FileList | null) => {
-    const file = files?.[0];
-    if (!file) return;
-    setFileName(file.name);
-    setPreviewUrl(URL.createObjectURL(file));
+    const selected = files?.[0];
+    if (!selected) return;
+    setFile(selected);
+    setFileName(selected.name);
+    setPreviewUrl(URL.createObjectURL(selected));
     setPhase("selected");
+    setErrorMessage(null);
   }, []);
 
-  const runAnalysis = useCallback(() => {
+  const runAnalysis = useCallback(async () => {
+    if (!file) return;
     setPhase("analyzing");
-    // Mock analysis delay — in production this is where the vision API call happens.
-    setTimeout(() => {
+    setErrorMessage(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const res = await fetch("/api/analyze", { method: "POST", body: formData });
+      const json = await res.json();
+
+      if (!res.ok) {
+        if (json?.error === "not_configured") {
+          const missing = Array.isArray(json.missing) ? json.missing.join(", ") : "API keys";
+          throw new Error(
+            `Real analysis isn't set up yet (missing: ${missing}). Add them to .env.local and restart the app — see README.md.`
+          );
+        }
+        throw new Error(json?.message ?? "Analysis failed. Please try again.");
+      }
+
+      const record = json.record as SearchRecord;
+      saveLastSearch(record);
+      appendHistory(record);
       router.push("/results");
-    }, 1400);
-  }, [router]);
+    } catch (err) {
+      setPhase("error");
+      setErrorMessage(err instanceof Error ? err.message : "Something went wrong.");
+    }
+  }, [file, router]);
 
   return (
     <div>
@@ -44,7 +74,9 @@ export function UploadDropzone() {
         className={`flex flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-14 text-center transition-colors ${
           phase === "dragging"
             ? "border-violet-400 bg-violet-50"
-            : "border-border-strong bg-surface-sunken hover:border-violet-300 hover:bg-violet-50/40"
+            : phase === "error"
+              ? "border-red-300 bg-red-50/40"
+              : "border-border-strong bg-surface-sunken hover:border-violet-300 hover:bg-violet-50/40"
         }`}
       >
         {previewUrl ? (
@@ -64,7 +96,11 @@ export function UploadDropzone() {
           {fileName ?? "Drag your Figma screenshot here"}
         </p>
         <p className="mt-1 text-xs text-ink-muted">
-          {fileName ? "Ready to analyze" : "PNG or JPG, up to 20MB"}
+          {phase === "analyzing"
+            ? "Analyzing with Claude Vision + reverse image search…"
+            : fileName
+              ? "Ready to analyze"
+              : "PNG, JPG, or WEBP, up to 4MB"}
         </p>
 
         <div className="mt-5 flex items-center gap-3">
@@ -99,15 +135,22 @@ export function UploadDropzone() {
         <input
           ref={inputRef}
           type="file"
-          accept="image/png, image/jpeg"
+          accept="image/png, image/jpeg, image/webp"
           className="hidden"
           onChange={(e) => handleFiles(e.target.files)}
         />
       </div>
 
-      <p className="mt-3 text-center text-xs text-ink-muted">
-        Analysis runs on mock data in this preview build — no image is uploaded anywhere.
-      </p>
+      {phase === "error" && errorMessage ? (
+        <div className="mt-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{errorMessage}</span>
+        </div>
+      ) : (
+        <p className="mt-3 text-center text-xs text-ink-muted">
+          Your screenshot is sent to Claude Vision and a reverse-image search API to find real live websites.
+        </p>
+      )}
     </div>
   );
 }

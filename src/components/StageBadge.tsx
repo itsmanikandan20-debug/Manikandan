@@ -1,5 +1,5 @@
 import type { IdentificationStage } from "@/lib/types";
-import { getStageLabel } from "@/lib/mock-data";
+import { getStageLabel } from "@/lib/stage";
 
 const stageStyles: Record<IdentificationStage, string> = {
   similar_image_found: "bg-blue-50 text-signal-match border-blue-100",

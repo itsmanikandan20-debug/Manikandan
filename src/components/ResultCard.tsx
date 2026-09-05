@@ -1,3 +1,6 @@
+"use client";
+
+import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { ExternalLink, GitCompareArrows } from "lucide-react";
@@ -5,17 +8,22 @@ import type { MatchResult } from "@/lib/types";
 import { StageBadge } from "./StageBadge";
 import { SimilarityRing } from "./SimilarityRing";
 
+const FALLBACK_THUMBNAIL = "/no-preview.svg";
+
 export function ResultCard({ result }: { result: MatchResult }) {
+  const [imgSrc, setImgSrc] = useState(result.screenshotUrl || FALLBACK_THUMBNAIL);
   const hasLiveLink = result.stage !== "source_not_found" && result.liveUrl;
 
   return (
     <div className="flex flex-col gap-5 rounded-2xl border border-border bg-white p-5 shadow-panel sm:flex-row">
       <div className="h-40 w-full shrink-0 overflow-hidden rounded-xl border border-border bg-surface-sunken sm:h-auto sm:w-56">
         <Image
-          src={result.screenshotUrl}
+          src={imgSrc}
           alt={`Screenshot of ${result.websiteName}`}
           width={640}
           height={440}
+          unoptimized
+          onError={() => setImgSrc(FALLBACK_THUMBNAIL)}
           className="h-full w-full object-cover"
         />
       </div>

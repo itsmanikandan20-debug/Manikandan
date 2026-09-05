@@ -1,7 +1,4 @@
 // Core domain types for Design Similarity Finder.
-// These model the real product shape even though data is mocked for v1 —
-// swapping mock-data.ts for live API calls should not require changing
-// any component that consumes these types.
 
 /** The three-stage confidence ladder the product promises never to blur together. */
 export type IdentificationStage =

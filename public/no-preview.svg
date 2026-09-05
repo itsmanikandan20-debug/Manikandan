@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="440" viewBox="0 0 640 440">
+  <rect width="640" height="440" fill="#FAF9FC"/>
+  <rect x="0.5" y="0.5" width="639" height="439" fill="none" stroke="#E7E3EE"/>
+  <g fill="#B3A9C7">
+    <circle cx="320" cy="185" r="28"/>
+    <path d="M270 250 h100 l-20 -40 -25 30 -15 -15 z" fill="#B3A9C7"/>
+  </g>
+  <text x="320" y="300" font-family="Arial, sans-serif" font-size="18" fill="#7A7288" text-anchor="middle">No preview available</text>
+</svg>
