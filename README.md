@@ -5,8 +5,9 @@ and find live websites with a similar layout, hero section, colour palette,
 typography, card structure, spacing, and overall visual style.
 
 This version does **real analysis** — no mock results. Uploads are sent to
-Claude Vision and a reverse-image search API to find actual live websites.
-See "Setup: API keys" below to turn this on (it needs three free-tier keys).
+Google Gemini and a reverse-image search API to find actual live websites.
+See "Setup: API keys" below to turn this on — all three required keys have a
+genuinely free tier, no credit card needed for any of them.
 
 ## Getting started
 
@@ -21,15 +22,13 @@ npm run dev
 Then open http://localhost:3000 in your browser. The sidebar shows whether
 real analysis is configured yet.
 
-## Setup: API keys (all have free tiers)
+## Setup: API keys (all genuinely free, no card required)
 
-Real analysis needs three keys in `.env.local`. **A Claude Pro (claude.ai)
-subscription does NOT include API access** — API usage is billed separately,
-pay-as-you-go, through a different product (console.anthropic.com).
+Real analysis needs three keys in `.env.local`:
 
 | Key | What it's for | Where to get it | Free tier |
 |---|---|---|---|
-| `ANTHROPIC_API_KEY` | Reads your screenshot (layout, colors, style) | console.anthropic.com → API Keys | New orgs typically get a small trial credit |
+| `GEMINI_API_KEY` | Reads your screenshot (layout, colors, style) | aistudio.google.com → "Get API key" | Free, no card required |
 | `SERPAPI_API_KEY` | Reverse-image search — finds visually similar live websites and their URLs | serpapi.com | 100 searches/month free, no card required |
 | `IMGBB_API_KEY` | Temporarily hosts your uploaded screenshot at a public URL (the search API needs a URL, not a raw file) | api.imgbb.com | Free, no card required |
 
@@ -51,9 +50,9 @@ Don't upload confidential/unreleased designs unless you're fine with that.
 ## How a search works (the 6 steps)
 
 1. **Upload** — `UploadDropzone` sends the file to `POST /api/analyze`.
-2. **AI vision** — `src/lib/vision.ts` sends the image to Claude, which
-   returns a structured description (layout, dominant colors, typography,
-   hero section, overall style).
+2. **AI vision** — `src/lib/vision.ts` sends the image to Google Gemini,
+   which returns a structured description (layout, dominant colors,
+   typography, hero section, overall style).
 3. **Visual image search** — `src/lib/reverse-image-search.ts` calls SerpApi
    (Google Lens) with a public URL of the image (uploaded via
    `src/lib/image-host.ts`) and gets back visually similar pages.
@@ -83,7 +82,7 @@ src/
   lib/
     types.ts                Shared TypeScript types for the domain model
     env.ts                  Checks which API keys are configured
-    vision.ts                Claude Vision call
+    vision.ts                Gemini Vision call
     image-host.ts            imgbb upload (for the search API's URL requirement)
     reverse-image-search.ts  SerpApi call
     live-check.ts             fetch()-based "is this site up" check

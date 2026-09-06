@@ -97,7 +97,7 @@ export function UploadDropzone() {
         </p>
         <p className="mt-1 text-xs text-ink-muted">
           {phase === "analyzing"
-            ? "Analyzing with Claude Vision + reverse image search…"
+            ? "Analyzing with Gemini Vision + reverse image search…"
             : fileName
               ? "Ready to analyze"
               : "PNG, JPG, or WEBP, up to 4MB"}
@@ -148,7 +148,7 @@ export function UploadDropzone() {
         </div>
       ) : (
         <p className="mt-3 text-center text-xs text-ink-muted">
-          Your screenshot is sent to Claude Vision and a reverse-image search API to find real live websites.
+          Your screenshot is sent to Gemini Vision and a reverse-image search API to find real live websites.
         </p>
       )}
     </div>

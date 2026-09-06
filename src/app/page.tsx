@@ -33,7 +33,7 @@ export default function DashboardPage() {
             <h2 className="text-base font-semibold text-ink">Upload a screenshot</h2>
             <p className="mt-1 text-sm text-ink-muted">
               Export a screenshot of your Figma frame and drop it below. We&apos;ll send it to
-              Claude Vision and a reverse-image search to find comparable live websites.
+              Gemini Vision and a reverse-image search to find comparable live websites.
             </p>
             <div className="mt-6">
               <UploadDropzone />

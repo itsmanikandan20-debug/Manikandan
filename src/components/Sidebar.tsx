@@ -78,7 +78,7 @@ export function Sidebar() {
               Real analysis is live
             </p>
             <p className="mt-1 text-xs leading-relaxed text-emerald-700/80">
-              Uploads are analyzed with Claude Vision and a real reverse-image search.
+              Uploads are analyzed with Gemini Vision and a real reverse-image search.
             </p>
           </>
         ) : (

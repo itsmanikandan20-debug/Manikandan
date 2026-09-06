@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getMissingEnvVars } from "@/lib/env";
 import { uploadImageForSearch } from "@/lib/image-host";
-import { analyzeDesignWithClaude } from "@/lib/vision";
+import { analyzeDesignWithGemini } from "@/lib/vision";
 import { findVisualMatches } from "@/lib/reverse-image-search";
 import { buildMatchResults } from "@/lib/build-results";
 import type { SearchRecord, UploadedDesign } from "@/lib/types";
@@ -57,7 +57,7 @@ export async function POST(request: Request) {
   try {
     const [hostedUrl, analysis] = await Promise.all([
       uploadImageForSearch(buffer, file.type),
-      analyzeDesignWithClaude(base64, file.type),
+      analyzeDesignWithGemini(base64, file.type),
     ]);
 
     const rawMatches = await findVisualMatches(hostedUrl);

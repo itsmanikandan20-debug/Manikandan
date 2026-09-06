@@ -1,4 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
+// Uses Google Gemini's free tier (no credit card required) to read the
+// uploaded screenshot. Called via plain fetch — no paid SDK needed.
 
 export interface DesignAnalysis {
   detectedLayout: string;
@@ -8,9 +9,8 @@ export interface DesignAnalysis {
   styleSummary: string;
 }
 
-// Haiku is the cheapest current vision-capable model — a good default
-// when cost matters more than maximum accuracy. Override via env if needed.
-const VISION_MODEL = process.env.ANTHROPIC_VISION_MODEL || "claude-haiku-4-5-20251001";
+// Override via env if this model ID is retired — check https://ai.google.dev/models
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
 const ANALYSIS_PROMPT = `You are analyzing a screenshot of a website or app design (likely exported from Figma).
 Respond with ONLY a JSON object, no markdown fences, no commentary, matching exactly this shape:
@@ -23,38 +23,50 @@ Respond with ONLY a JSON object, no markdown fences, no commentary, matching exa
 }
 Estimate dominantColors as best you can as hex codes, ordered from most to least dominant.`;
 
-export async function analyzeDesignWithClaude(
+export async function analyzeDesignWithGemini(
   base64Image: string,
   mediaType: string
 ): Promise<DesignAnalysis> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
 
-  const client = new Anthropic({ apiKey });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
 
-  const message = await client.messages.create({
-    model: VISION_MODEL,
-    max_tokens: 600,
-    messages: [
+  let json: Record<string, unknown>;
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
       {
-        role: "user",
-        content: [
-          {
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: mediaType as "image/png" | "image/jpeg" | "image/webp",
-              data: base64Image,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: ANALYSIS_PROMPT },
+                { inline_data: { mime_type: mediaType, data: base64Image } },
+              ],
             },
-          },
-          { type: "text", text: ANALYSIS_PROMPT },
-        ],
-      },
-    ],
-  });
+          ],
+        }),
+      }
+    );
+    json = await res.json();
+    if (!res.ok) {
+      const message =
+        typeof json?.error === "object" && json.error && "message" in json.error
+          ? String((json.error as { message: unknown }).message)
+          : `Gemini request failed (${res.status})`;
+      throw new Error(message);
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
 
-  const textBlock = message.content.find((block) => block.type === "text");
-  const raw = textBlock && "text" in textBlock ? textBlock.text : "";
+  const candidates = json.candidates as Array<{ content?: { parts?: Array<{ text?: string }> } }> | undefined;
+  const raw = candidates?.[0]?.content?.parts?.[0]?.text ?? "";
   const cleaned = raw
     .trim()
     .replace(/^```(?:json)?/i, "")
@@ -65,7 +77,7 @@ export async function analyzeDesignWithClaude(
   try {
     parsed = JSON.parse(cleaned);
   } catch {
-    throw new Error("Claude did not return valid JSON for the design analysis");
+    throw new Error("Gemini did not return valid JSON for the design analysis");
   }
 
   return {

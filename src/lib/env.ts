@@ -3,7 +3,7 @@
 // ever imported from server-side code (API routes).
 
 export const REQUIRED_ENV_VARS = [
-  "ANTHROPIC_API_KEY",
+  "GEMINI_API_KEY",
   "SERPAPI_API_KEY",
   "IMGBB_API_KEY",
 ] as const;
