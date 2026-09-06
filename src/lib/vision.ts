@@ -10,7 +10,7 @@ export interface DesignAnalysis {
 }
 
 // Override via env if this model ID is retired — check https://ai.google.dev/models
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.6-flash";
 
 const ANALYSIS_PROMPT = `You are analyzing a screenshot of a website or app design (likely exported from Figma).
 Respond with ONLY a JSON object, no markdown fences, no commentary, matching exactly this shape:
