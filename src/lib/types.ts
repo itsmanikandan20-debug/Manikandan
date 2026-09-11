@@ -1,50 +1,170 @@
-// Core domain types for Design Similarity Finder.
+// Shared domain types for DesignCheck.
+// These describe the normalized shape we reduce both Figma and the live
+// website down to, so the comparison engine can treat them the same way.
 
-/** The three-stage confidence ladder the product promises never to blur together. */
-export type IdentificationStage =
-  | "similar_image_found" // A visually close match exists somewhere on the web.
-  | "source_identified" // We believe we know which live site it belongs to.
-  | "live_verified" // We fetched that URL just now and confirmed it's live and matches.
-  | "source_not_found"; // No confident source — shown honestly instead of guessed.
+export type Viewport = {
+  label: string;
+  width: number;
+  height: number;
+};
 
-export interface AttributeScore {
-  attribute:
-    | "Layout"
-    | "Hero section"
-    | "Colour palette"
-    | "Typography"
-    | "Card structure"
-    | "Spacing"
-    | "Overall visual style";
-  score: number; // 0-100
-  note: string; // short human-readable reason for the score
+export const VIEWPORTS: Viewport[] = [
+  { label: "1440 × 900 (Desktop)", width: 1440, height: 900 },
+  { label: "1366 × 768 (Laptop)", width: 1366, height: 768 },
+  { label: "1280 × 800 (Small laptop)", width: 1280, height: 800 },
+  { label: "1024 × 768 (Tablet landscape)", width: 1024, height: 768 },
+  { label: "768 × 1024 (Tablet portrait)", width: 768, height: 1024 },
+  { label: "390 × 844 (Mobile)", width: 390, height: 844 },
+];
+
+export type ElementType =
+  | "frame"
+  | "section"
+  | "heading"
+  | "paragraph"
+  | "text"
+  | "button"
+  | "image"
+  | "icon"
+  | "input"
+  | "link"
+  | "component"
+  | "container";
+
+// A normalized visual element, extracted from either Figma or the DOM.
+export interface DesignElement {
+  id: string;
+  source: "figma" | "website";
+  type: ElementType;
+  name: string;
+  text?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fontFamily?: string;
+  fontSize?: number;
+  fontWeight?: number | string;
+  color?: string;
+  backgroundColor?: string;
+  borderRadius?: number;
+  paddingTop?: number;
+  paddingRight?: number;
+  paddingBottom?: number;
+  paddingLeft?: number;
+  gap?: number;
+  opacity?: number;
+  imageUrl?: string;
+  href?: string;
+  selector?: string; // CSS selector, website elements only
+  autoLayout?: "horizontal" | "vertical" | "none";
+  section: string; // human label like "Hero", "Header", "Footer"
+  children?: string[]; // ids of children, for reference only
 }
 
-export interface UploadedDesign {
-  id: string;
+export interface FigmaExtraction {
+  fileKey: string;
   fileName: string;
-  imageUrl: string;
-  uploadedAt: string; // ISO date
-  dominantColors: string[]; // hex values extracted from the screenshot
-  detectedLayout: string; // e.g. "Split hero, 3-column feature grid"
+  pageName: string;
+  frameName: string;
+  frameWidth: number;
+  frameHeight: number;
+  thumbnailUrl?: string;
+  elements: DesignElement[];
+  isDemo: boolean;
 }
 
-export interface MatchResult {
-  id: string;
-  websiteName: string;
-  screenshotUrl: string;
-  liveUrl: string | null; // null when source_not_found
-  stage: IdentificationStage;
-  similarityScore: number; // 0-100 overall
-  matchedAttributes: AttributeScore[];
-  matchedOn: string[]; // short tags e.g. ["Layout", "Colour palette"]
-  lastCheckedAt: string; // ISO date the live-verification happened
+export interface WebsiteExtraction {
+  url: string;
+  finalUrl: string;
+  viewport: Viewport;
+  screenshotDataUrl?: string;
+  screenshotUrl?: string;
+  elements: DesignElement[];
+  brokenLinks: string[];
+  brokenImages: string[];
+  isDemo: boolean;
 }
 
-export interface SearchRecord {
+export type IssueCategory = "visual" | "content" | "layout" | "ux";
+export type Severity = "high" | "medium" | "low";
+export type IssueStatus = "open" | "approved" | "rejected" | "fixed";
+
+export interface MatchedPair {
+  figmaId: string | null;
+  websiteId: string | null;
+  confidence: number; // 0-100
+}
+
+export interface Issue {
   id: string;
-  design: UploadedDesign;
-  results: MatchResult[];
-  createdAt: string; // ISO date
-  status: "completed" | "processing" | "no_matches";
+  number: number;
+  category: IssueCategory;
+  severity: Severity;
+  title: string;
+  section: string;
+  page: string;
+  description: string;
+  expected: string;
+  actual: string;
+  difference: string;
+  correction: string;
+  matchConfidence: number | null;
+  figmaElementId?: string;
+  websiteElementId?: string;
+  websiteSelector?: string;
+  boundingBox?: { x: number; y: number; width: number; height: number };
+  status: IssueStatus;
+  designerComment?: string;
+  aiExplanation?: string;
+}
+
+export interface CategoryScores {
+  visual: number;
+  content: number;
+  layout: number;
+  ux: number;
+}
+
+export interface ResponsiveFinding {
+  viewport: Viewport;
+  issues: {
+    type:
+      | "overflow"
+      | "overlap"
+      | "text-cutoff"
+      | "button-unusable"
+      | "image-broken"
+      | "nav-broken"
+      | "layout-unusable";
+    description: string;
+    severity: Severity;
+    selector?: string;
+  }[];
+  screenshotDataUrl?: string;
+  screenshotUrl?: string;
+}
+
+export interface AnalysisResult {
+  id: string;
+  createdAt: string;
+  figmaUrl: string;
+  websiteUrl: string;
+  viewport: Viewport;
+  isDemo: boolean;
+  figma: FigmaExtraction;
+  website: WebsiteExtraction;
+  matches: MatchedPair[];
+  issues: Issue[];
+  overallScore: number;
+  categoryScores: CategoryScores;
+  responsive: ResponsiveFinding[];
+  warnings: string[];
+}
+
+export interface AnalyzeRequestBody {
+  figmaUrl: string;
+  websiteUrl: string;
+  viewportIndex: number;
+  checkResponsive: boolean;
 }

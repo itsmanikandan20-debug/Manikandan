@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Space_Grotesk, Inter } from "next/font/google";
-import { Sidebar } from "@/components/Sidebar";
+import { Navbar } from "@/components/Navbar";
 import "./globals.css";
 
 const display = Space_Grotesk({
@@ -16,17 +16,16 @@ const body = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Design Similarity Finder",
-  description:
-    "Upload a Figma screenshot and discover live websites with a similar layout, colour palette, typography, and visual style.",
+  title: "DesignCheck",
+  description: "Compare your Figma design with the live website — automatically detect UI, content, and UX issues.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <body className={`${display.variable} ${body.variable} font-body`}>
-        <Sidebar />
-        <div className="lg:pl-64">{children}</div>
+        <Navbar />
+        {children}
       </body>
     </html>
   );

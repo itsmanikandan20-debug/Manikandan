@@ -1,117 +1,65 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Image from "next/image";
 import Link from "next/link";
-import { Header } from "@/components/Header";
-import { loadRealHistory, saveLastSearch } from "@/lib/search-store";
-import { getStageLabel } from "@/lib/stage";
-import type { SearchRecord } from "@/lib/types";
-
-const statusStyles: Record<string, string> = {
-  completed: "bg-emerald-50 text-signal-verified",
-  processing: "bg-blue-50 text-signal-match",
-  no_matches: "bg-red-50 text-signal-notfound",
-};
-
-const statusLabel: Record<string, string> = {
-  completed: "Completed",
-  processing: "Processing",
-  no_matches: "No matches",
-};
+import { Trash2, Sparkles } from "lucide-react";
+import { loadHistory, deleteAnalysis, type HistoryEntry } from "@/lib/storage";
 
 export default function HistoryPage() {
-  const [records, setRecords] = useState<SearchRecord[]>([]);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
 
   useEffect(() => {
-    setRecords(loadRealHistory());
+    setHistory(loadHistory());
   }, []);
 
+  function remove(id: string) {
+    deleteAnalysis(id);
+    setHistory(loadHistory());
+  }
+
   return (
-    <>
-      <Header title="Search history" description="Every design you've uploaded and analyzed in this browser" />
+    <main className="mx-auto max-w-content px-6 py-10 lg:px-10">
+      <h1 className="font-display text-2xl font-bold text-ink">Analysis History</h1>
+      <p className="mt-1 text-sm text-ink-muted">
+        Stored in this browser only — there&apos;s no account system in this MVP, so history won&apos;t follow you to another device.
+      </p>
 
-      <main className="mx-auto max-w-content px-6 py-8 lg:px-10">
-        {records.length === 0 ? (
-          <div className="rounded-2xl border border-border bg-white p-8 text-center shadow-panel">
-            <p className="text-sm text-ink-muted">
-              No searches yet in this browser. Upload a screenshot to get started.
-            </p>
-            <Link
-              href="/"
-              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700"
-            >
-              Go to upload
-            </Link>
-          </div>
-        ) : (
-          <div className="overflow-hidden rounded-2xl border border-border bg-white shadow-panel">
-            <div className="hidden grid-cols-[80px_1.5fr_1fr_1fr_100px] gap-4 border-b border-border bg-surface-sunken px-5 py-3 text-xs font-medium text-ink-muted sm:grid">
-              <span>Design</span>
-              <span>File</span>
-              <span>Top match</span>
-              <span>Date</span>
-              <span>Status</span>
+      {history.length === 0 ? (
+        <div className="mt-8 rounded-2xl border border-dashed border-border bg-surface-sunken p-10 text-center">
+          <p className="text-sm text-ink-muted">No analyses yet.</p>
+          <Link href="/" className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-violet-700">
+            Run your first analysis
+          </Link>
+        </div>
+      ) : (
+        <div className="mt-6 space-y-3">
+          {history.map((entry) => (
+            <div key={entry.id} className="flex items-center justify-between gap-4 rounded-xl border border-border bg-white p-4 shadow-sm">
+              <Link href={`/results/${entry.id}`} className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <p className="truncate text-sm font-semibold text-ink">{entry.websiteUrl}</p>
+                  {entry.isDemo && (
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-700">
+                      <Sparkles size={10} /> Demo
+                    </span>
+                  )}
+                </div>
+                <p className="mt-0.5 truncate text-xs text-ink-muted">{entry.figmaUrl}</p>
+                <p className="mt-1 text-xs text-ink-muted">
+                  {new Date(entry.createdAt).toLocaleString()} · Score {entry.overallScore}% · {entry.issueCount} issues
+                </p>
+              </Link>
+              <button
+                onClick={() => remove(entry.id)}
+                className="shrink-0 rounded-lg p-2 text-ink-muted hover:bg-severity-high-bg hover:text-severity-high"
+                title="Delete"
+              >
+                <Trash2 size={16} />
+              </button>
             </div>
-
-            <ul className="divide-y divide-border">
-              {records.map((record) => {
-                const topMatch = record.results[0];
-                return (
-                  <li key={record.id}>
-                    <Link
-                      href="/results"
-                      onClick={() => saveLastSearch(record)}
-                      className="grid grid-cols-1 gap-3 px-5 py-4 transition-colors hover:bg-surface-sunken sm:grid-cols-[80px_1.5fr_1fr_1fr_100px] sm:items-center sm:gap-4"
-                    >
-                      <div className="h-14 w-14 overflow-hidden rounded-lg border border-border">
-                        <Image
-                          src={record.design.imageUrl}
-                          alt={record.design.fileName}
-                          width={120}
-                          height={120}
-                          unoptimized
-                          className="h-full w-full object-cover"
-                        />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-ink">
-                          {record.design.fileName}
-                        </p>
-                        <p className="truncate text-xs text-ink-muted">
-                          {record.design.detectedLayout}
-                        </p>
-                      </div>
-                      <div className="text-sm text-ink-soft">
-                        {topMatch ? (
-                          <>
-                            <p className="truncate">{topMatch.websiteName}</p>
-                            <p className="text-xs text-ink-muted">{getStageLabel(topMatch.stage)}</p>
-                          </>
-                        ) : (
-                          <span className="text-ink-muted">—</span>
-                        )}
-                      </div>
-                      <p className="text-sm text-ink-muted">
-                        {new Date(record.createdAt).toLocaleDateString(undefined, {
-                          month: "short",
-                          day: "numeric",
-                          year: "numeric",
-                        })}
-                      </p>
-                      <span
-                        className={`inline-flex w-fit items-center rounded-full px-2.5 py-1 text-xs font-medium ${statusStyles[record.status]}`}
-                      >
-                        {statusLabel[record.status]}
-                      </span>
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        )}
-      </main>
-    </>
+          ))}
+        </div>
+      )}
+    </main>
   );
 }

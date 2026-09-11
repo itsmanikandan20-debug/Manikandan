@@ -1,19 +1,8 @@
-// Central place that knows which API keys real analysis requires.
-// Nothing here reads secrets into the client bundle — this file is only
-// ever imported from server-side code (API routes).
-
-export const REQUIRED_ENV_VARS = [
-  "GEMINI_API_KEY",
-  "SERPAPI_API_KEY",
-  "IMGBB_API_KEY",
-] as const;
-
-export type RequiredEnvVar = (typeof REQUIRED_ENV_VARS)[number];
-
-export function getMissingEnvVars(): RequiredEnvVar[] {
-  return REQUIRED_ENV_VARS.filter((key) => !process.env[key]);
-}
-
-export function isRealAnalysisConfigured(): boolean {
-  return getMissingEnvVars().length === 0;
+// Central place that checks which optional API keys are configured, so
+// the UI can honestly show what's real vs. what's Demo Mode / templated.
+export function getServerConfig() {
+  return {
+    figmaConfigured: Boolean(process.env.FIGMA_TOKEN && process.env.FIGMA_TOKEN.trim().length > 0),
+    geminiConfigured: Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 0),
+  };
 }

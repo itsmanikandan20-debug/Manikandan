@@ -1,16 +1,19 @@
 {
-  "name": "design-similarity-finder",
+  "name": "designcheck",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "postinstall": "playwright install chromium --with-deps || true"
   },
   "dependencies": {
-    "lucide-react": "^1.41.0",
+    "@sparticuz/chromium": "^131.0.1",
+    "lucide-react": "^0.462.0",
     "next": "14.2.35",
+    "playwright-core": "^1.49.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -21,6 +24,7 @@
     "autoprefixer": "^10.4.19",
     "eslint": "^8.57.0",
     "eslint-config-next": "14.2.35",
+    "playwright": "^1.49.1",
     "postcss": "^8.4.40",
     "tailwindcss": "^3.4.7",
     "typescript": "^5.5.4"

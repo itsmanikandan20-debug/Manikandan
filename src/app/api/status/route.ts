@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { getMissingEnvVars } from "@/lib/env";
+import { getServerConfig } from "@/lib/env";
+
+export const runtime = "nodejs";
 
 export async function GET() {
-  const missing = getMissingEnvVars();
-  return NextResponse.json({ configured: missing.length === 0, missing });
+  return NextResponse.json(getServerConfig());
 }

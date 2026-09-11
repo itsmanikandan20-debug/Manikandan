@@ -1,89 +1,113 @@
 import { NextResponse } from "next/server";
-import { getMissingEnvVars } from "@/lib/env";
-import { uploadImageForSearch } from "@/lib/image-host";
-import { analyzeDesignWithGemini } from "@/lib/vision";
-import { findVisualMatches } from "@/lib/reverse-image-search";
-import { buildMatchResults } from "@/lib/build-results";
-import type { SearchRecord, UploadedDesign } from "@/lib/types";
+import type { AnalyzeRequestBody, AnalysisResult } from "@/lib/types";
+import { VIEWPORTS } from "@/lib/types";
+import { getServerConfig } from "@/lib/env";
+import { fetchFigmaExtraction, FigmaApiError } from "@/lib/figma-api";
+import { analyzeWebsite, WebsiteAnalysisError } from "@/lib/website-analyzer";
+import { matchElements } from "@/lib/matcher";
+import { compareDesignToWebsite, detectUxIssues, resetIssueNumbering } from "@/lib/compare";
+import { computeScores } from "@/lib/scoring";
+import { checkAllResponsiveViewports } from "@/lib/responsive-check";
+import { explainIssuesWithAI } from "@/lib/ai-explain";
+import { makeId } from "@/lib/id";
 
+// Playwright needs a real Node.js runtime (not the Edge runtime), and a
+// real analysis (Figma fetch + headless browser + optional responsive
+// pass) can take a while — give it the most headroom Vercel allows.
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-// Vercel serverless functions cap request body size well under this on
-// some plans/regions — see README "Known limitations" if uploads fail.
-const MAX_FILE_BYTES = 4 * 1024 * 1024;
-const ACCEPTED_TYPES = ["image/png", "image/jpeg", "image/webp"];
+export async function POST(req: Request) {
+  let body: AnalyzeRequestBody;
+  try {
+    body = (await req.json()) as AnalyzeRequestBody;
+  } catch {
+    return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
+  }
 
-export async function POST(request: Request) {
-  const missing = getMissingEnvVars();
-  if (missing.length > 0) {
+  const { figmaUrl, websiteUrl, viewportIndex, checkResponsive } = body;
+  const viewport = VIEWPORTS[viewportIndex] ?? VIEWPORTS[0];
+
+  if (!figmaUrl?.trim() || !websiteUrl?.trim()) {
+    return NextResponse.json({ error: "Both a Figma URL and a website URL are required." }, { status: 400 });
+  }
+
+  const { figmaConfigured } = getServerConfig();
+  if (!figmaConfigured) {
     return NextResponse.json(
       {
-        error: "not_configured",
-        message: "Real analysis isn't set up yet. Add the required API keys to .env.local and restart the app.",
-        missing,
+        error:
+          "Live analysis needs a Figma API token configured on the server (FIGMA_TOKEN in .env.local). Add one, or click \"Try Demo\" to see DesignCheck with sample data.",
+        code: "FIGMA_NOT_CONFIGURED",
       },
-      { status: 503 }
-    );
-  }
-
-  let formData: FormData;
-  try {
-    formData = await request.formData();
-  } catch {
-    return NextResponse.json({ error: "bad_request", message: "Could not read the upload." }, { status: 400 });
-  }
-
-  const file = formData.get("file");
-  if (!(file instanceof File)) {
-    return NextResponse.json({ error: "bad_request", message: "No file was uploaded." }, { status: 400 });
-  }
-  if (!ACCEPTED_TYPES.includes(file.type)) {
-    return NextResponse.json(
-      { error: "bad_request", message: "Only PNG, JPG, or WEBP screenshots are supported." },
-      { status: 400 }
-    );
-  }
-  if (file.size > MAX_FILE_BYTES) {
-    return NextResponse.json(
-      { error: "bad_request", message: "Image is too large. Please upload a screenshot under 4MB." },
       { status: 400 }
     );
   }
 
-  const buffer = Buffer.from(await file.arrayBuffer());
-  const base64 = buffer.toString("base64");
-
   try {
-    const [hostedUrl, analysis] = await Promise.all([
-      uploadImageForSearch(buffer, file.type),
-      analyzeDesignWithGemini(base64, file.type),
+    resetIssueNumbering();
+
+    const [figma, website] = await Promise.all([
+      fetchFigmaExtraction(figmaUrl, process.env.FIGMA_TOKEN!),
+      analyzeWebsite(websiteUrl, viewport),
     ]);
 
-    const rawMatches = await findVisualMatches(hostedUrl);
-    const results = await buildMatchResults(rawMatches);
+    const matches = matchElements(figma.elements, website.elements, figma.frameWidth);
+    const page = figma.frameName || "Home";
+    const issues = [
+      ...compareDesignToWebsite(figma, website, matches, page),
+      ...detectUxIssues(website, page),
+    ];
 
-    const design: UploadedDesign = {
-      id: `upload-${Date.now()}`,
-      fileName: file.name,
-      imageUrl: hostedUrl,
-      uploadedAt: new Date().toISOString(),
-      dominantColors: analysis.dominantColors,
-      detectedLayout: analysis.detectedLayout,
-    };
+    const explanations = await explainIssuesWithAI(issues);
+    for (const issue of issues) {
+      if (explanations[issue.id]) issue.aiExplanation = explanations[issue.id];
+    }
 
-    const record: SearchRecord = {
-      id: `search-${Date.now()}`,
-      design,
-      results,
+    const { overallScore, categoryScores } = computeScores(issues);
+
+    const warnings: string[] = [];
+    if (Math.abs(figma.frameWidth - viewport.width) > 40) {
+      warnings.push(
+        `The selected Figma frame is ${figma.frameWidth}px wide, but you're comparing against a ${viewport.width}px website viewport. For the most accurate comparison, pick a Figma frame that matches your chosen viewport width.`
+      );
+    }
+
+    let responsive: AnalysisResult["responsive"] = [];
+    if (checkResponsive) {
+      const otherViewports = VIEWPORTS.filter((v) => v.width !== viewport.width);
+      responsive = await checkAllResponsiveViewports(website.url, otherViewports);
+    }
+
+    const result: AnalysisResult = {
+      id: makeId("analysis"),
       createdAt: new Date().toISOString(),
-      status: results.length > 0 ? "completed" : "no_matches",
+      figmaUrl,
+      websiteUrl,
+      viewport,
+      isDemo: false,
+      figma,
+      website,
+      matches,
+      issues,
+      overallScore,
+      categoryScores,
+      responsive,
+      warnings,
     };
 
-    return NextResponse.json({ record });
+    return NextResponse.json(result);
   } catch (err) {
-    console.error("Design analysis failed:", err);
-    const message = err instanceof Error ? err.message : "Unknown error during analysis.";
-    return NextResponse.json({ error: "upstream_failed", message }, { status: 502 });
+    if (err instanceof FigmaApiError) {
+      return NextResponse.json({ error: err.message, code: "FIGMA_ERROR" }, { status: 400 });
+    }
+    if (err instanceof WebsiteAnalysisError) {
+      return NextResponse.json({ error: err.message, code: "WEBSITE_ERROR" }, { status: 400 });
+    }
+    console.error("Analyze failed:", err);
+    return NextResponse.json(
+      { error: "Something went wrong during analysis. Please try again." },
+      { status: 500 }
+    );
   }
 }

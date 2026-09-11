@@ -1,132 +1,198 @@
-# Design Similarity Finder
+# DesignCheck
 
-A SaaS dashboard for UI/UX designers: upload a screenshot of a Figma design
-and find live websites with a similar layout, hero section, colour palette,
-typography, card structure, spacing, and overall visual style.
+**A Figma-to-Live-Website QA tool.** Paste a Figma design link and a live
+website link, pick a screen size, and DesignCheck compares them — flagging
+mismatched button text, wrong colors, missing images, spacing drift,
+broken links, and more. Designers review and annotate each issue; the app
+generates a clean, exportable QA report for developers, who can click any
+issue to jump straight to it on the live site.
 
-This version does **real analysis** — no mock results. Uploads are sent to
-Google Gemini and a reverse-image search API to find actual live websites.
-See "Setup: API keys" below to turn this on — all three required keys have a
-genuinely free tier, no credit card needed for any of them.
+This is a **portfolio project**, not a production SaaS: no payments, no
+accounts, no database. Everything needed to try it — including a full
+"Try Demo" mode with ~12 realistic sample issues — works with zero setup.
 
-## Getting started
+---
 
-You need [Node.js](https://nodejs.org) version 18.18 or newer installed.
+## Part 1 — Try it in 3 minutes (no coding, no API keys)
 
-```bash
-npm install
-cp .env.local.example .env.local   # then fill in your API keys — see below
-npm run dev
-```
+You need one thing installed: **Node.js** (the engine that runs this kind
+of app on your computer).
 
-Then open http://localhost:3000 in your browser. The sidebar shows whether
-real analysis is configured yet.
+1. Go to **https://nodejs.org**, download the "LTS" version, and install it
+   like any other program (click Next/Next/Finish).
+2. Open a terminal:
+   - **Mac:** press `Cmd + Space`, type `Terminal`, press Enter.
+   - **Windows:** press the Start key, type `Command Prompt`, press Enter.
+3. In that terminal, type `cd ` (with a space after it), then drag this
+   project's folder into the terminal window — it'll paste the folder path
+   — then press Enter. This moves you "into" the project.
+4. Type this and press Enter (only needed once — it downloads the pieces
+   this project depends on, including a small headless browser used to
+   inspect live websites):
+   ```
+   npm install
+   ```
+   This can take a minute or two the first time.
+5. Type this and press Enter:
+   ```
+   npm run dev
+   ```
+6. You'll see a message like `Local: http://localhost:3000`. Open your
+   browser and go to that address.
+7. Click **Try Demo**. That's it — no keys needed.
 
-## Setup: API keys (all genuinely free, no card required)
+To stop the app later, click back in the terminal window and press
+`Ctrl + C`.
 
-Real analysis needs three keys in `.env.local`:
+---
 
-| Key | What it's for | Where to get it | Free tier |
-|---|---|---|---|
-| `GEMINI_API_KEY` | Reads your screenshot (layout, colors, style) | aistudio.google.com → "Get API key" | Free, no card required |
-| `SERPAPI_API_KEY` | Reverse-image search — finds visually similar live websites and their URLs | serpapi.com | 100 searches/month free, no card required |
-| `IMGBB_API_KEY` | Temporarily hosts your uploaded screenshot at a public URL (the search API needs a URL, not a raw file) | api.imgbb.com | Free, no card required |
+## Part 2 — Turning on real analysis (optional)
 
-Until all three are set, uploading a screenshot shows a clear
-**"API keys needed"** message instead of any results — this app never shows
-made-up matches.
+Demo Mode uses realistic sample data. To analyze a *real* Figma file and a
+*real* website, add one free API key.
 
-**Privacy note:** because the reverse-image search needs a public URL, your
-uploaded screenshot is briefly hosted at a random public link on imgbb.
-Don't upload confidential/unreleased designs unless you're fine with that.
+1. In the project folder, find the file named **`.env.local.example`**.
+2. Make a copy of it in the same folder, and rename the copy to exactly
+   **`.env.local`** (note the leading dot, and no `.example` at the end).
+   - On Mac/Windows Finder/Explorer, you may need to enable "show hidden
+     files" to see files starting with a dot — or just do this step from
+     the terminal: `cp .env.local.example .env.local` (Mac) or
+     `copy .env.local.example .env.local` (Windows), run from inside the
+     project folder.
+3. Open `.env.local` in any text editor (Notepad, TextEdit, VS Code — all
+   fine).
+4. Follow the instructions written inside that file to get a **free Figma
+   personal access token**, and paste it after `FIGMA_TOKEN=`.
+5. (Optional) Also get a free Gemini API key the same way, for
+   AI-generated "why this matters" explanations on each issue — paste it
+   after `GEMINI_API_KEY=`. Skip this if you don't want it; everything
+   else still works.
+6. Save the file, go back to your terminal, stop the app (`Ctrl + C`) and
+   run `npm run dev` again so it picks up the new keys.
 
-## Pages
+**Important — matching Figma frame and website viewport:** for an
+accurate comparison, the Figma frame you select should be the same width
+as the viewport you pick in DesignCheck (e.g. a 1440px-wide desktop frame
+compared against the "1440 × 900" viewport). Comparing a 1440px design
+against a 390px mobile screenshot will produce a lot of noise — the app
+will warn you if the widths look mismatched.
 
-- `/` — Dashboard / Upload: drag-and-drop a screenshot, see recent searches
-- `/results` — Search Results: ranked candidate matches for the current upload
-- `/compare` — Compare Designs: side-by-side view against one match
-- `/history` — Search History: past searches made in this browser
+**Copying a Figma link:** open your file in Figma, select the top-level
+frame you want to check (e.g. "Desktop / Home"), right-click it →
+**Copy link to selection**. That link includes the frame ID, so
+DesignCheck analyzes exactly that frame instead of guessing.
 
-## How a search works (the 6 steps)
+---
 
-1. **Upload** — `UploadDropzone` sends the file to `POST /api/analyze`.
-2. **AI vision** — `src/lib/vision.ts` sends the image to Google Gemini,
-   which returns a structured description (layout, dominant colors,
-   typography, hero section, overall style).
-3. **Visual image search** — `src/lib/reverse-image-search.ts` calls SerpApi
-   (Google Lens) with a public URL of the image (uploaded via
-   `src/lib/image-host.ts`) and gets back visually similar pages.
-4. **Extract source URLs** — each SerpApi match already includes the source
-   page's URL and site name.
-5. **Live check** — `src/lib/live-check.ts` fetches each candidate URL to
-   see if the server responds.
-6. **Display** — `src/lib/build-results.ts` turns all of this into
-   `MatchResult[]`, which `/results` and `/compare` render. There's no
-   database yet, so a result is stored in the browser (`sessionStorage` for
-   the current search, `localStorage` for history) — see
-   `src/lib/search-store.ts`.
+## Part 3 — Deploying to Vercel (put it online, free)
 
-## Project structure
+[Vercel](https://vercel.com) is a hosting service with a generous free
+tier, made by the same company behind Next.js (the framework this app is
+built with).
+
+1. Push this project to a GitHub repository (if you're reading this inside
+   a repository that a Claude Code session already created for you, this
+   step is likely done — check with whoever set it up).
+2. Go to **https://vercel.com** and sign up/log in (you can sign in with
+   your GitHub account).
+3. Click **Add New… → Project**.
+4. Select this GitHub repository from the list and click **Import**.
+5. Vercel auto-detects this as a Next.js project — you don't need to
+   change any build settings.
+6. Before clicking Deploy, open **Environment Variables** and add the same
+   keys from your `.env.local` file:
+   - `FIGMA_TOKEN` → paste your Figma token
+   - `GEMINI_API_KEY` → paste your Gemini key (optional)
+7. Click **Deploy**. After a minute or two, Vercel gives you a live URL
+   like `designcheck-yourname.vercel.app` — that's your portfolio link.
+
+**A known limitation of real (non-demo) website analysis on Vercel's free
+tier:** DesignCheck uses a real headless browser (Playwright) to open the
+live website, which is a heavier operation than a typical serverless
+function. It's configured to work within Vercel's free-tier limits using a
+slimmed-down Chromium build, but very slow/heavy websites can still time
+out. **Demo Mode always works regardless**, so your portfolio link is
+never broken even if a specific live analysis times out — this is called
+out in the "Known limitations" section below too.
+
+---
+
+## What's real vs. simplified (read this before showing it off)
+
+This project follows a principle of **never faking a result** — if
+something can be measured, DesignCheck measures it directly instead of
+guessing or hard-coding it:
+
+- **Demo Mode is not a hard-coded "results" screen.** The demo's sample
+  Figma data and sample website data are run through the exact same
+  matching → comparison → scoring engine used for real analyses. It's a
+  fair demonstration of how the tool actually works, not a mockup.
+- **Element matching is a heuristic, and says so.** Figma elements are
+  matched to website DOM elements using text similarity, type, position,
+  and size — never assumed to be 100% correct. Every matched issue shows
+  its **match confidence %** in the UI.
+- **AI is used narrowly, for one thing.** An optional Gemini API call
+  turns already-computed differences into a one-sentence, plain-language
+  "why this matters" note. It never decides *whether* something is
+  different or *by how much* — that's plain measurement/arithmetic.
+
+### MVP limitations (intentional, and worth knowing)
+
+- **No database / no accounts.** Analysis results and your designer review
+  notes (approve/reject/comments) are stored in your browser's
+  `localStorage`. They won't follow you to another browser or device, and
+  clearing your browser data clears your history. Good enough for a
+  portfolio demo; a real product would add a database (e.g. Supabase) here.
+- **"Open on Website" element highlighting.** For a real (non-demo)
+  analysis, clicking an issue opens the actual live website in a new tab
+  and offers a **draggable bookmarklet** — drag it to your bookmarks bar
+  once, then click it while on the live site to draw a red outline +
+  tooltip around that exact element. This is the practical stand-in for a
+  full browser extension, which is out of scope for an MVP. In Demo Mode,
+  "Open on Website" instead opens a simulated page inside DesignCheck
+  itself (since the demo's website isn't a real URL), scrolled and
+  highlighted the same way.
+- **Responsive checking is heuristic-based**, not pixel-perfect — it flags
+  likely overflow, overlapping elements, tiny tap targets, and probable
+  text cut-off from the page's rendered layout, clearly labeled as
+  estimates rather than guarantees.
+- **Figma section/spacing detection** relies on your Figma frame using
+  named top-level frames (e.g. "Header", "Hero", "Footer") and Auto Layout
+  for the most useful results. A file with no Auto Layout still compares
+  fine on position/size/color/text — just without the spacing/gap checks.
+
+---
+
+## Project structure (for anyone who wants to look under the hood)
 
 ```
 src/
   app/
-    api/analyze/route.ts  The real pipeline: upload -> vision -> search -> live-check
-    api/status/route.ts   Tells the UI whether API keys are configured
-    layout.tsx             Root shell: fonts + sidebar
-    page.tsx                Dashboard / Upload
-    results/page.tsx        Search Results
-    compare/page.tsx        Compare Designs
-    history/page.tsx        Search History
-  components/               Reusable UI pieces (Sidebar, Header, ResultCard, etc.)
+    page.tsx                  Landing page: URL inputs, viewport picker, Analyze / Try Demo
+    results/[id]/page.tsx     Score dashboard, screenshots, issue list, designer review
+    report/[id]/page.tsx      Printable developer QA report
+    history/page.tsx          Past analyses (stored in this browser)
+    demo-site/page.tsx        Simulated "live site" used by Demo Mode's Open-on-Website
+    api/analyze/route.ts      Real analysis: Figma API + Playwright + comparison engine
+    api/demo/route.ts         Demo Mode data (same engine, sample input)
+    api/status/route.ts       Tells the UI which API keys are configured
+  components/                 Reusable UI pieces (score gauge, issue cards, screenshot compare…)
   lib/
-    types.ts                Shared TypeScript types for the domain model
-    env.ts                  Checks which API keys are configured
-    vision.ts                Gemini Vision call
-    image-host.ts            imgbb upload (for the search API's URL requirement)
-    reverse-image-search.ts  SerpApi call
-    live-check.ts             fetch()-based "is this site up" check
-    build-results.ts         Combines everything into MatchResult[]
-    search-store.ts          Browser storage for results/history (no DB yet)
-    stage.ts                  Labels for the honesty-ladder stages
+    types.ts                  Shared TypeScript types for the whole domain model
+    figma-api.ts               Real Figma REST API client + node-tree extraction
+    website-analyzer.ts        Playwright: screenshot + DOM/CSS extraction + broken link/image checks
+    responsive-check.ts        Heuristic overflow/overlap/cutoff checks at other viewport sizes
+    matcher.ts                 Figma ↔ website element matching (with confidence scoring)
+    compare.ts                 Turns matched/unmatched elements into Issue[]
+    scoring.ts                  Category + overall score calculation
+    ai-explain.ts               Optional Gemini call for plain-language issue explanations
+    mock-page.ts, demo-*.ts     Demo Mode's sample Figma/website data + generated SVG screenshots
+    storage.ts                  Browser localStorage helpers (history + results)
+    bookmarklet.ts               Generates the "highlight this element" bookmarklet
 ```
 
-## The honesty ladder
+## Tech stack
 
-`MatchResult.stage` is a strict enum (`similar_image_found` |
-`source_identified` | `live_verified` | `source_not_found`). The real
-pipeline only ever sets a stage to what it actually confirmed:
-
-- No source URL from the search API → `similar_image_found`
-- A source URL, but the live-check failed or timed out → `source_identified`
-- A source URL that responded to a live fetch just now → `live_verified`
-- No matches at all for the upload → the whole search shows "No similar
-  websites found," not a fabricated result
-
-## Known limitations (MVP)
-
-- **No per-attribute breakdown for real results.** The 7-category score
-  breakdown (Layout, Hero, Colour palette, etc.) shown on `/compare` needs a
-  separate vision comparison per candidate site, which costs an extra API
-  call per result — left out of this MVP to keep costs near $0. Real results
-  currently show one overall approximate score instead.
-- **Similarity score is a rank, not a measurement.** Google Lens doesn't
-  return a numeric similarity score, only a relevance order, so the score is
-  derived from ranking position. The UI says this explicitly.
-- **History is per-browser, not per-account.** There's no database, so
-  search history lives in `localStorage` and won't follow you to another
-  device or browser.
-- **Vercel request size / timeout limits.** Uploads are capped at 4MB
-  server-side to stay under typical serverless body-size limits. The full
-  pipeline (vision + search + live-checks) can take several seconds; if your
-  Vercel plan has a short function timeout, large or slow requests may fail
-  — check your plan's limits if this happens.
-
-## Next steps beyond this MVP
-
-- Add a database (e.g. Postgres via Vercel Postgres/Supabase) so history
-  persists per account instead of per-browser.
-- Add per-candidate attribute scoring by running a second, targeted vision
-  comparison for each result (costs more — worth doing once accuracy matters
-  more than staying free).
-- Add real user accounts / auth if this becomes multi-user.
+Next.js (App Router) · React · TypeScript · Tailwind CSS · Figma REST API
+· Playwright · Google Gemini (optional) · deployed on Vercel. No database
+— everything ships on Vercel's free tier.
