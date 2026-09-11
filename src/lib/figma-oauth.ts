@@ -8,11 +8,12 @@ const AUTHORIZE_URL = "https://www.figma.com/oauth";
 const TOKEN_URL = "https://api.figma.com/v1/oauth/token";
 const REFRESH_URL = "https://api.figma.com/v1/oauth/refresh";
 const ME_URL = "https://api.figma.com/v1/me";
-// "files:read" lets us fetch the design; "current_user:read" lets us show
-// the designer's own Figma name/photo after they connect. Both must also
-// be checked ON in the Figma app's own "OAuth scopes" settings page, or
-// Figma rejects the request with "Invalid scopes for app".
-const SCOPE = "files:read,current_user:read";
+// "file_content:read" lets us fetch the design + render images from it;
+// "current_user:read" lets us show the designer's own Figma name/photo
+// after they connect. Both must also be checked ON in the Figma app's own
+// "OAuth scopes" settings page (under "Files" and "Users"), or Figma
+// rejects the request with "Invalid scopes for app".
+const SCOPE = "file_content:read,current_user:read";
 
 export class FigmaOAuthError extends Error {}
 
