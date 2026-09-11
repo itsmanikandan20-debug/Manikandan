@@ -7,7 +7,7 @@ import { getValidAccessToken, FigmaOAuthError } from "@/lib/figma-oauth";
 import { fetchFigmaExtraction, FigmaApiError } from "@/lib/figma-api";
 import { analyzeWebsite, WebsiteAnalysisError } from "@/lib/website-analyzer";
 import { matchElements } from "@/lib/matcher";
-import { compareDesignToWebsite, detectUxIssues, resetIssueNumbering } from "@/lib/compare";
+import { compareDesignToWebsite, detectUxIssues, numberIssues } from "@/lib/compare";
 import { computeScores } from "@/lib/scoring";
 import { checkAllResponsiveViewports } from "@/lib/responsive-check";
 import { explainIssuesWithAI } from "@/lib/ai-explain";
@@ -71,8 +71,6 @@ export async function POST(req: Request) {
   }
 
   try {
-    resetIssueNumbering();
-
     const [figma, website] = await Promise.all([
       fetchFigmaExtraction(figmaUrl, accessToken),
       analyzeWebsite(websiteUrl, viewport),
@@ -80,10 +78,10 @@ export async function POST(req: Request) {
 
     const matches = matchElements(figma.elements, website.elements, figma.frameWidth);
     const page = figma.frameName || "Home";
-    const issues = [
+    const issues = numberIssues([
       ...compareDesignToWebsite(figma, website, matches, page),
       ...detectUxIssues(website, page),
-    ];
+    ]);
 
     const explanations = await explainIssuesWithAI(issues);
     for (const issue of issues) {

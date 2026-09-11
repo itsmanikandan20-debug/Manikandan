@@ -10,23 +10,17 @@ import type {
 import { normalizeText, round } from "./similarity";
 import { makeId } from "./id";
 
-let issueCounter = 0;
-function nextIssueNumber(): number {
-  issueCounter += 1;
-  return issueCounter;
-}
-
-// Exposed so callers (API routes) can reset numbering per-analysis —
-// otherwise issue numbers would keep climbing across requests in the same
-// server process.
-export function resetIssueNumbering() {
-  issueCounter = 0;
-}
-
+// Issue numbers (#1, #2, #3…) are assigned once, at the end, by
+// numberIssues() below — never here. Two different designers can hit the
+// same warm serverless instance at the same moment; a shared/module-level
+// counter would let their concurrent requests interleave and corrupt each
+// other's numbering. Keeping this function pure (no counter, no
+// server-wide state) means every request is fully isolated from every
+// other request, no matter how Vercel schedules them.
 function makeIssue(partial: Omit<Issue, "id" | "number" | "status">): Issue {
   return {
     id: makeId("issue"),
-    number: nextIssueNumber(),
+    number: 0,
     status: "open",
     ...partial,
   };
@@ -34,8 +28,19 @@ function makeIssue(partial: Omit<Issue, "id" | "number" | "status">): Issue {
 
 // Exposed for callers that need to hand-author an issue outside the
 // automatic comparison (e.g. the demo dataset, or a bespoke accessibility
-// check) while still sharing the same numbering sequence.
+// check).
 export const createIssue = makeIssue;
+
+/**
+ * Assigns final, sequential #1, #2, #3… issue numbers based on array
+ * order. Call this once, after every issue for one analysis has been
+ * collected (compare + UX + any hand-authored ones) — it takes a plain
+ * array in and returns a plain array out, with no shared state involved,
+ * so it's safe to call from concurrent requests.
+ */
+export function numberIssues(issues: Issue[]): Issue[] {
+  return issues.map((issue, i) => ({ ...issue, number: i + 1 }));
+}
 
 function byId(elements: DesignElement[]): Map<string, DesignElement> {
   return new Map(elements.map((e) => [e.id, e]));

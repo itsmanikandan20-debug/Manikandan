@@ -4,7 +4,7 @@ import { buildDemoFigma } from "./demo-figma";
 import { buildDemoWebsite } from "./demo-website";
 import { buildDemoResponsive } from "./demo-responsive";
 import { matchElements } from "./matcher";
-import { compareDesignToWebsite, detectUxIssues, createIssue, resetIssueNumbering } from "./compare";
+import { compareDesignToWebsite, detectUxIssues, createIssue, numberIssues } from "./compare";
 import { computeScores } from "./scoring";
 import { makeId } from "./id";
 
@@ -16,8 +16,6 @@ import { makeId } from "./id";
  * what makes it a fair demonstration of how the tool actually works.
  */
 export function buildDemoAnalysis(): AnalysisResult {
-  resetIssueNumbering();
-
   const figma = buildDemoFigma();
   const website = buildDemoWebsite(VIEWPORTS[0]);
   const page = "Home";
@@ -52,7 +50,8 @@ export function buildDemoAnalysis(): AnalysisResult {
     })
   );
 
-  const { overallScore, categoryScores } = computeScores(issues);
+  const numberedIssues = numberIssues(issues);
+  const { overallScore, categoryScores } = computeScores(numberedIssues);
 
   return {
     id: makeId("demo"),
@@ -64,7 +63,7 @@ export function buildDemoAnalysis(): AnalysisResult {
     figma,
     website,
     matches,
-    issues,
+    issues: numberedIssues,
     overallScore,
     categoryScores,
     responsive: buildDemoResponsive(),
