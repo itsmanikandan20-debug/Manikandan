@@ -77,8 +77,11 @@ interface FigmaFileResponse {
 }
 
 async function figmaFetch<T>(path: string, token: string): Promise<T> {
+  // OAuth access tokens (what every designer's session holds) go in a
+  // Bearer Authorization header — "X-Figma-Token" is only for the older
+  // personal-access-token scheme, which we no longer use anywhere.
   const res = await fetch(`${FIGMA_API}${path}`, {
-    headers: { "X-Figma-Token": token },
+    headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
   });
   if (res.status === 403 || res.status === 401) {
