@@ -2,19 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
-import { ScanEye, History, LayoutGrid } from "lucide-react";
+import { ScanEye, History, LayoutGrid, LogOut } from "lucide-react";
+import { useFigmaAccount } from "@/lib/use-figma-account";
 
 export function Navbar() {
   const pathname = usePathname();
-  const [status, setStatus] = useState<{ figmaConfigured: boolean; geminiConfigured: boolean } | null>(null);
-
-  useEffect(() => {
-    fetch("/api/status")
-      .then((r) => r.json())
-      .then(setStatus)
-      .catch(() => setStatus(null));
-  }, []);
+  const { loading, figmaOAuthConfigured, connected, handle, avatarUrl, disconnect } = useFigmaAccount();
 
   const links = [
     { href: "/", label: "Dashboard", icon: LayoutGrid },
@@ -50,10 +43,27 @@ export function Navbar() {
           })}
         </nav>
 
-        {status && (
-          <div className="hidden items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs font-medium text-ink-muted md:flex">
-            <span className={`h-1.5 w-1.5 rounded-full ${status.figmaConfigured ? "bg-status-approved" : "bg-severity-medium"}`} />
-            {status.figmaConfigured ? "Live analysis ready" : "Demo Mode only"}
+        {!loading && (
+          <div className="hidden items-center gap-2 md:flex">
+            {connected ? (
+              <div className="flex items-center gap-2 rounded-full border border-border py-1 pl-1 pr-2 text-xs font-medium text-ink-soft">
+                {avatarUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={avatarUrl} alt="" className="h-6 w-6 rounded-full" />
+                ) : (
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-status-approved-bg text-status-approved">●</span>
+                )}
+                <span className="max-w-[110px] truncate">{handle ?? "Connected"}</span>
+                <button onClick={disconnect} title="Disconnect Figma" className="rounded-full p-1 text-ink-muted hover:bg-surface-sunken hover:text-severity-high">
+                  <LogOut size={13} />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs font-medium text-ink-muted">
+                <span className={`h-1.5 w-1.5 rounded-full ${figmaOAuthConfigured ? "bg-severity-medium" : "bg-ink-muted"}`} />
+                {figmaOAuthConfigured ? "Figma not connected" : "Demo Mode only"}
+              </div>
+            )}
           </div>
         )}
       </div>

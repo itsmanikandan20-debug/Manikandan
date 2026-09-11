@@ -1,41 +1,75 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import { Figma, Globe2, Sparkles, ArrowRight, AlertCircle } from "lucide-react";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Figma, Globe2, Sparkles, ArrowRight, AlertCircle, CheckCircle2, LogOut } from "lucide-react";
 import { ViewportSelect } from "@/components/ViewportSelect";
 import { ProgressSteps, type ProgressStep } from "@/components/ProgressSteps";
 import { saveAnalysis } from "@/lib/storage";
+import { useFigmaAccount } from "@/lib/use-figma-account";
 import type { AnalysisResult } from "@/lib/types";
 
 const STEP_LABELS = [
-  "Reading the Figma design",
+  "Reading your Figma design",
   "Opening the live website",
   "Matching design elements to the page",
   "Comparing visuals, content, layout & UX",
   "Scoring the results",
 ];
 
+const OAUTH_ERROR_MESSAGES: Record<string, string> = {
+  not_configured: "Figma sign-in isn't set up on this server yet. Try Demo Mode instead, or ask the site owner to add FIGMA_CLIENT_ID / FIGMA_CLIENT_SECRET.",
+  denied: "Figma connection was cancelled — permission wasn't granted, so nothing was connected.",
+  state_mismatch: "That sign-in link expired or was already used. Please click Connect Figma again.",
+};
+
+function ConnectNotice() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const connected = params.get("connected");
+  const figmaError = params.get("figma_error");
+
+  useEffect(() => {
+    if (connected || figmaError) {
+      const t = setTimeout(() => router.replace("/"), 6000);
+      return () => clearTimeout(t);
+    }
+  }, [connected, figmaError, router]);
+
+  if (!connected && !figmaError) return null;
+
+  if (connected) {
+    return (
+      <div className="mx-auto mt-6 flex max-w-xl items-start gap-2 rounded-xl border border-status-approved/30 bg-status-approved-bg px-3.5 py-3 text-sm text-status-approved">
+        <CheckCircle2 size={16} className="mt-0.5 shrink-0" />
+        <span>Figma connected — you can now analyze your own files.</span>
+      </div>
+    );
+  }
+
+  const message = OAUTH_ERROR_MESSAGES[figmaError!] ?? decodeURIComponent(figmaError!);
+  return (
+    <div className="mx-auto mt-6 flex max-w-xl items-start gap-2 rounded-xl border border-severity-high/30 bg-severity-high-bg px-3.5 py-3 text-sm text-severity-high">
+      <AlertCircle size={16} className="mt-0.5 shrink-0" />
+      <span>{message}</span>
+    </div>
+  );
+}
+
 export default function LandingPage() {
   const router = useRouter();
+  const account = useFigmaAccount();
+
   const [figmaUrl, setFigmaUrl] = useState("");
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [viewportIndex, setViewportIndex] = useState(0);
   const [checkResponsive, setCheckResponsive] = useState(false);
 
-  const [status, setStatus] = useState<{ figmaConfigured: boolean; geminiConfigured: boolean } | null>(null);
   const [loading, setLoading] = useState(false);
   const [demoLoading, setDemoLoading] = useState(false);
   const [activeStep, setActiveStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  useEffect(() => {
-    fetch("/api/status")
-      .then((r) => r.json())
-      .then(setStatus)
-      .catch(() => setStatus(null));
-  }, []);
 
   const stopStepper = () => {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -73,6 +107,7 @@ export default function LandingPage() {
       const data = await res.json();
       if (!res.ok) {
         setError(data.error || "Analysis failed. Please try again.");
+        if (data.code === "FIGMA_NOT_CONNECTED") await account.refresh();
         return;
       }
       stopStepper();
@@ -105,6 +140,8 @@ export default function LandingPage() {
     status: i < activeStep ? "done" : i === activeStep ? "active" : "pending",
   }));
 
+  const canAnalyze = account.figmaOAuthConfigured && account.connected;
+
   return (
     <main className="mx-auto max-w-content px-6 py-14 lg:px-10">
       <div className="mx-auto max-w-2xl text-center">
@@ -115,9 +152,77 @@ export default function LandingPage() {
         <p className="mt-3 text-lg text-ink-muted">Compare your Figma design with the live website.</p>
       </div>
 
+      <Suspense fallback={null}>
+        <ConnectNotice />
+      </Suspense>
+
       <div className="mx-auto mt-10 max-w-xl rounded-2xl border border-border bg-white p-6 shadow-panel sm:p-8">
-        {!loading ? (
+        {loading ? (
+          <div className="py-4">
+            <h2 className="mb-1 font-display text-lg font-semibold text-ink">Analyzing your design…</h2>
+            <p className="mb-6 text-sm text-ink-muted">This usually takes 15–45 seconds.</p>
+            <ProgressSteps steps={steps} />
+          </div>
+        ) : account.loading ? (
+          <div className="flex items-center justify-center gap-2 py-10 text-sm text-ink-muted">Checking your Figma connection…</div>
+        ) : !canAnalyze ? (
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-violet-100 text-sm font-bold text-violet-700">1</span>
+              <h2 className="font-display text-lg font-semibold text-ink">Connect your Figma account</h2>
+            </div>
+            <p className="mt-2 text-sm text-ink-muted">
+              DesignCheck analyzes designs using your own Figma sign-in — it only ever sees files you personally have access to, never
+              anyone else&apos;s.
+            </p>
+
+            {!account.figmaOAuthConfigured ? (
+              <div className="mt-4 flex items-start gap-2 rounded-xl border border-severity-medium/30 bg-severity-medium-bg px-3.5 py-3 text-sm text-severity-medium">
+                <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                <span>
+                  Figma sign-in isn&apos;t configured on this server yet. If this is your deployment, add{" "}
+                  <code className="rounded bg-white/60 px-1 py-0.5">FIGMA_CLIENT_ID</code> and{" "}
+                  <code className="rounded bg-white/60 px-1 py-0.5">FIGMA_CLIENT_SECRET</code> — see the README. Otherwise, try the demo
+                  below.
+                </span>
+              </div>
+            ) : (
+              <a
+                href="/api/auth/figma/login"
+                className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 py-3.5 text-sm font-semibold text-white shadow-pop transition hover:bg-violet-700"
+              >
+                <Figma size={16} /> Connect Figma
+              </a>
+            )}
+
+            <div className="relative py-5 text-center text-xs text-ink-muted">
+              <span className="relative bg-white px-3">or</span>
+              <div className="absolute inset-x-0 top-1/2 -z-10 h-px bg-border" />
+            </div>
+
+            <button
+              type="button"
+              onClick={handleDemo}
+              disabled={demoLoading}
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-violet-200 bg-violet-50 py-3.5 text-sm font-semibold text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Sparkles size={16} /> {demoLoading ? "Loading demo…" : "Try Demo"}
+            </button>
+            <p className="mt-2 text-center text-xs text-ink-muted">No setup required — instantly see a realistic example with ~12 detected issues.</p>
+          </div>
+        ) : (
           <form onSubmit={handleAnalyze} className="space-y-5">
+            {account.connected && (
+              <div className="flex items-center justify-between gap-2 rounded-xl border border-status-approved/30 bg-status-approved-bg px-3.5 py-2.5 text-sm text-status-approved">
+                <span className="flex items-center gap-1.5">
+                  <CheckCircle2 size={15} /> Connected to Figma as <strong>{account.handle}</strong>
+                </span>
+                <button type="button" onClick={account.disconnect} className="flex items-center gap-1 text-xs font-semibold hover:underline">
+                  <LogOut size={12} /> Disconnect
+                </button>
+              </div>
+            )}
+
             <div>
               <label className="mb-1.5 block text-sm font-medium text-ink">Figma Design URL</label>
               <div className="relative">
@@ -130,6 +235,7 @@ export default function LandingPage() {
                   className="w-full rounded-xl border border-border bg-white py-3 pl-11 pr-4 text-sm text-ink shadow-sm outline-none transition placeholder:text-ink-muted/70 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
                 />
               </div>
+              <p className="mt-1 text-xs text-ink-muted">Right-click a frame in Figma → Copy link to selection.</p>
             </div>
 
             <div>
@@ -161,17 +267,6 @@ export default function LandingPage() {
               Also run responsive checks at the other 5 viewport sizes (slower)
             </label>
 
-            {status && !status.figmaConfigured && (
-              <div className="flex items-start gap-2 rounded-xl border border-severity-medium/30 bg-severity-medium-bg px-3.5 py-3 text-sm text-severity-medium">
-                <AlertCircle size={16} className="mt-0.5 shrink-0" />
-                <span>
-                  No Figma API token is configured yet, so live analysis is unavailable. Click <strong>Try Demo</strong> below to see
-                  DesignCheck in action, or add <code className="rounded bg-white/60 px-1 py-0.5">FIGMA_TOKEN</code> to your{" "}
-                  <code className="rounded bg-white/60 px-1 py-0.5">.env.local</code> file — see the README for exact steps.
-                </span>
-              </div>
-            )}
-
             {error && (
               <div className="flex items-start gap-2 rounded-xl border border-severity-high/30 bg-severity-high-bg px-3.5 py-3 text-sm text-severity-high">
                 <AlertCircle size={16} className="mt-0.5 shrink-0" />
@@ -181,7 +276,7 @@ export default function LandingPage() {
 
             <button
               type="submit"
-              disabled={loading || Boolean(status && !status.figmaConfigured)}
+              disabled={loading}
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 py-3.5 text-sm font-semibold text-white shadow-pop transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Analyze Design <ArrowRight size={16} />
@@ -200,23 +295,14 @@ export default function LandingPage() {
             >
               <Sparkles size={16} /> {demoLoading ? "Loading demo…" : "Try Demo"}
             </button>
-            <p className="text-center text-xs text-ink-muted">
-              No setup required — instantly see a realistic example with ~12 detected issues.
-            </p>
           </form>
-        ) : (
-          <div className="py-4">
-            <h2 className="mb-1 font-display text-lg font-semibold text-ink">Analyzing your design…</h2>
-            <p className="mb-6 text-sm text-ink-muted">This usually takes 15–45 seconds.</p>
-            <ProgressSteps steps={steps} />
-          </div>
         )}
       </div>
 
       <div className="mx-auto mt-12 grid max-w-3xl gap-4 sm:grid-cols-3">
         {[
-          { title: "1. Compare", text: "We match Figma elements to live DOM elements by text, type, position & size." },
-          { title: "2. Detect", text: "Visual, content, layout & UX differences are measured — not guessed." },
+          { title: "1. Connect", text: "Sign in with your own Figma account — DesignCheck only ever sees files you grant access to." },
+          { title: "2. Compare", text: "We match Figma elements to live DOM elements by text, type, position & size." },
           { title: "3. Report", text: "Review, approve, and export a developer-ready QA report in one click." },
         ].map((card) => (
           <div key={card.title} className="rounded-xl border border-border bg-white p-4 shadow-panel">

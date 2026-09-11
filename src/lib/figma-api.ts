@@ -82,7 +82,7 @@ async function figmaFetch<T>(path: string, token: string): Promise<T> {
     cache: "no-store",
   });
   if (res.status === 403 || res.status === 401) {
-    throw new FigmaApiError("Figma rejected the API token — check FIGMA_TOKEN in your .env.local file.");
+    throw new FigmaApiError("Your Figma connection was rejected or has expired. Please reconnect your Figma account and try again.");
   }
   if (res.status === 404) {
     throw new FigmaApiError("Figma file not found. Make sure the link is correct and the file is shared with your account.");

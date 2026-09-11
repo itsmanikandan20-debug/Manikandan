@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import type { AnalyzeRequestBody, AnalysisResult } from "@/lib/types";
 import { VIEWPORTS } from "@/lib/types";
 import { getServerConfig } from "@/lib/env";
+import { getSession, buildSessionCookie } from "@/lib/session";
+import { getValidAccessToken, FigmaOAuthError } from "@/lib/figma-oauth";
 import { fetchFigmaExtraction, FigmaApiError } from "@/lib/figma-api";
 import { analyzeWebsite, WebsiteAnalysisError } from "@/lib/website-analyzer";
 import { matchElements } from "@/lib/matcher";
@@ -37,18 +39,42 @@ export async function POST(req: Request) {
     return NextResponse.json(
       {
         error:
-          "Live analysis needs a Figma API token configured on the server (FIGMA_TOKEN in .env.local). Add one, or click \"Try Demo\" to see DesignCheck with sample data.",
+          'Figma sign-in isn\'t set up on this server yet (FIGMA_CLIENT_ID / FIGMA_CLIENT_SECRET are missing). Click "Try Demo" to see DesignCheck with sample data in the meantime.',
         code: "FIGMA_NOT_CONFIGURED",
       },
       { status: 400 }
     );
   }
 
+  // Every designer analyzes their own Figma file using their own
+  // connected account — never a token shared across users.
+  const session = getSession(req);
+  if (!session) {
+    return NextResponse.json(
+      {
+        error: 'Connect your Figma account first — click "Connect Figma" above, then try again.',
+        code: "FIGMA_NOT_CONNECTED",
+      },
+      { status: 401 }
+    );
+  }
+
+  let accessToken: string;
+  let refreshedSession;
+  try {
+    const result = await getValidAccessToken(session);
+    accessToken = result.accessToken;
+    refreshedSession = result.refreshedSession;
+  } catch (err) {
+    const message = err instanceof FigmaOAuthError ? err.message : "Your Figma connection expired.";
+    return NextResponse.json({ error: message, code: "FIGMA_NOT_CONNECTED" }, { status: 401 });
+  }
+
   try {
     resetIssueNumbering();
 
     const [figma, website] = await Promise.all([
-      fetchFigmaExtraction(figmaUrl, process.env.FIGMA_TOKEN!),
+      fetchFigmaExtraction(figmaUrl, accessToken),
       analyzeWebsite(websiteUrl, viewport),
     ]);
 
@@ -96,7 +122,9 @@ export async function POST(req: Request) {
       warnings,
     };
 
-    return NextResponse.json(result);
+    const res = NextResponse.json(result);
+    if (refreshedSession) res.headers.append("Set-Cookie", buildSessionCookie(refreshedSession));
+    return res;
   } catch (err) {
     if (err instanceof FigmaApiError) {
       return NextResponse.json({ error: err.message, code: "FIGMA_ERROR" }, { status: 400 });

@@ -7,9 +7,12 @@ broken links, and more. Designers review and annotate each issue; the app
 generates a clean, exportable QA report for developers, who can click any
 issue to jump straight to it on the live site.
 
-This is a **portfolio project**, not a production SaaS: no payments, no
-accounts, no database. Everything needed to try it — including a full
-"Try Demo" mode with ~12 realistic sample issues — works with zero setup.
+Built for **multiple designers sharing one deployment** — each person
+signs in with their own Figma account (OAuth), and DesignCheck only ever
+sees the files that person personally has access to. There's no shared
+Figma credential, no payments, and no separate password system to manage.
+Everything needed to try it — including a full "Try Demo" mode with ~12
+realistic sample issues — works with zero setup.
 
 ---
 
@@ -46,10 +49,14 @@ To stop the app later, click back in the terminal window and press
 
 ---
 
-## Part 2 — Turning on real analysis (optional)
+## Part 2 — Turning on real analysis: "Connect Figma" sign-in (optional)
 
-Demo Mode uses realistic sample data. To analyze a *real* Figma file and a
-*real* website, add one free API key.
+Demo Mode uses realistic sample data and needs nothing from you. To let
+designers analyze a *real* Figma file against a *real* website, you (the
+person deploying DesignCheck) register **one Figma app** that lets any
+designer sign in with their own Figma account — you're not sharing your
+own Figma access, you're turning on a "Sign in with Figma" button for
+everyone who uses your deployment.
 
 1. In the project folder, find the file named **`.env.local.example`**.
 2. Make a copy of it in the same folder, and rename the copy to exactly
@@ -61,14 +68,27 @@ Demo Mode uses realistic sample data. To analyze a *real* Figma file and a
      project folder.
 3. Open `.env.local` in any text editor (Notepad, TextEdit, VS Code — all
    fine).
-4. Follow the instructions written inside that file to get a **free Figma
-   personal access token**, and paste it after `FIGMA_TOKEN=`.
+4. Follow the instructions written inside that file to:
+   - Create a free **Figma OAuth app** at figma.com/developers/apps, and
+     paste its Client ID / Client Secret after `FIGMA_CLIENT_ID=` and
+     `FIGMA_CLIENT_SECRET=`.
+   - Generate a random `SESSION_SECRET` (the file tells you the exact
+     one-line command to run).
 5. (Optional) Also get a free Gemini API key the same way, for
    AI-generated "why this matters" explanations on each issue — paste it
    after `GEMINI_API_KEY=`. Skip this if you don't want it; everything
    else still works.
 6. Save the file, go back to your terminal, stop the app (`Ctrl + C`) and
    run `npm run dev` again so it picks up the new keys.
+7. Reload the app in your browser — you'll now see a **"Connect Figma"**
+   button. Click it, approve access on Figma's screen, and you're back in
+   DesignCheck signed in with your own account.
+
+**Every designer who uses this deployment repeats step 7 for themselves**
+— each person's "Connect Figma" click signs *them* into *their own* Figma
+account and only ever gives DesignCheck access to files *they* can already
+see. Nobody sees anyone else's files, and nobody needs your personal Figma
+token.
 
 **Important — matching Figma frame and website viewport:** for an
 accurate comparison, the Figma frame you select should be the same width
@@ -101,10 +121,26 @@ built with).
    change any build settings.
 6. Before clicking Deploy, open **Environment Variables** and add the same
    keys from your `.env.local` file:
-   - `FIGMA_TOKEN` → paste your Figma token
+   - `FIGMA_CLIENT_ID` → paste your Figma app's Client ID
+   - `FIGMA_CLIENT_SECRET` → paste your Figma app's Client Secret
+   - `SESSION_SECRET` → paste your generated random string
    - `GEMINI_API_KEY` → paste your Gemini key (optional)
 7. Click **Deploy**. After a minute or two, Vercel gives you a live URL
-   like `designcheck-yourname.vercel.app` — that's your portfolio link.
+   like `designcheck-yourname.vercel.app` — that's your shareable link.
+8. **One more required step — tell Figma about your new live URL:** go
+   back to **figma.com/developers/apps**, open your app, and add a second
+   Callback URL:
+   ```
+   https://designcheck-yourname.vercel.app/api/auth/figma/callback
+   ```
+   (using your actual Vercel URL from step 7). Without this, "Connect
+   Figma" will fail on the deployed site with a Figma error page, even
+   though it works locally — Figma only allows redirecting back to URLs
+   you've explicitly registered.
+
+Every designer you share the Vercel link with can now click **Connect
+Figma** and sign in with their own account — nothing more for you to set
+up per designer.
 
 **A known limitation of real (non-demo) website analysis on Vercel's free
 tier:** DesignCheck uses a real headless browser (Playwright) to open the
@@ -135,14 +171,29 @@ guessing or hard-coding it:
   turns already-computed differences into a one-sentence, plain-language
   "why this matters" note. It never decides *whether* something is
   different or *by how much* — that's plain measurement/arithmetic.
+- **Multi-user by design, with no shared credential.** DesignCheck never
+  stores one Figma token that everyone's requests reuse. Each designer's
+  "Connect Figma" sign-in (standard OAuth2 — see `src/lib/figma-oauth.ts`)
+  gets its own access token, encrypted and kept only in *that person's own
+  browser cookie* (`src/lib/session.ts`), never written to a server-side
+  file or database. Two designers using the same deployed link at the same
+  moment are fully isolated from each other automatically, because there's
+  no shared state to collide on.
 
 ### MVP limitations (intentional, and worth knowing)
 
-- **No database / no accounts.** Analysis results and your designer review
-  notes (approve/reject/comments) are stored in your browser's
-  `localStorage`. They won't follow you to another browser or device, and
-  clearing your browser data clears your history. Good enough for a
-  portfolio demo; a real product would add a database (e.g. Supabase) here.
+- **No database / no accounts beyond Figma sign-in.** "Connect Figma" is
+  both the login and the permission grant — there's no separate DesignCheck
+  password or profile. Analysis results and designer review notes
+  (approve/reject/comments) are stored in each person's own browser
+  `localStorage`, so they won't follow a designer to another browser or
+  device, and clearing browser data clears that history. Good enough for a
+  portfolio/team tool; a production version would add a database (e.g.
+  Supabase) so results synced across devices.
+- **A Figma session lasts until the browser cookie is cleared** (about 180
+  days, auto-refreshed). If Figma revokes access or the refresh token
+  expires, DesignCheck just asks the designer to click Connect Figma again
+  — no error state is silent about this.
 - **"Open on Website" element highlighting.** For a real (non-demo)
   analysis, clicking an issue opens the actual live website in a new tab
   and offers a **draggable bookmarklet** — drag it to your bookmarks bar
@@ -175,11 +226,18 @@ src/
     demo-site/page.tsx        Simulated "live site" used by Demo Mode's Open-on-Website
     api/analyze/route.ts      Real analysis: Figma API + Playwright + comparison engine
     api/demo/route.ts         Demo Mode data (same engine, sample input)
-    api/status/route.ts       Tells the UI which API keys are configured
+    api/status/route.ts       Tells the UI whether Figma sign-in / Gemini are configured
+    api/auth/figma/login/     Redirects the designer to Figma to approve access
+    api/auth/figma/callback/  Figma redirects back here with a code; exchanged for tokens
+    api/auth/figma/logout/    Clears the designer's session cookie
+    api/auth/me/              Tells the UI who (if anyone) is currently connected
   components/                 Reusable UI pieces (score gauge, issue cards, screenshot compare…)
   lib/
     types.ts                  Shared TypeScript types for the whole domain model
-    figma-api.ts               Real Figma REST API client + node-tree extraction
+    figma-oauth.ts              Figma OAuth2: authorize URL, token exchange, refresh, /v1/me
+    session.ts                   Encrypts each designer's Figma tokens into their own cookie
+    use-figma-account.ts         Client hook: "is Figma sign-in available, is this visitor connected"
+    figma-api.ts               Real Figma REST API client + node-tree extraction (takes a token in)
     website-analyzer.ts        Playwright: screenshot + DOM/CSS extraction + broken link/image checks
     responsive-check.ts        Heuristic overflow/overlap/cutoff checks at other viewport sizes
     matcher.ts                 Figma ↔ website element matching (with confidence scoring)
@@ -193,6 +251,7 @@ src/
 
 ## Tech stack
 
-Next.js (App Router) · React · TypeScript · Tailwind CSS · Figma REST API
-· Playwright · Google Gemini (optional) · deployed on Vercel. No database
-— everything ships on Vercel's free tier.
+Next.js (App Router) · React · TypeScript · Tailwind CSS · Figma REST API +
+OAuth2 · Playwright · Google Gemini (optional) · deployed on Vercel. No
+database — per-designer Figma sessions live in an encrypted browser
+cookie, and everything ships on Vercel's free tier.
