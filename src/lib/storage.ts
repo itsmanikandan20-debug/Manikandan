@@ -2,14 +2,26 @@
 
 import type { AnalysisResult } from "./types";
 
-// No database in this MVP — analyses live in the browser's localStorage.
-// That keeps the whole project deployable on Vercel's free tier with zero
+// No database in this MVP — analyses live in the browser's storage. That
+// keeps the whole project deployable on Vercel's free tier with zero
 // setup, at the cost of history not following you across devices/browsers.
 // (Documented as an MVP limitation in the README.)
+//
+// Two different browser storages are used on purpose. All the small stuff —
+// scores, issues, text, warnings — goes in localStorage, which is simple
+// and synchronous but capped at roughly 5-10MB per site. Screenshots and
+// design thumbnails go in IndexedDB instead, which browsers grant far more
+// room to (typically hundreds of MB or more) — a single real full-page
+// screenshot, or a Figma/SVG thumbnail with embedded photos, can easily be
+// several MB on its own, which kept exceeding localStorage's much smaller
+// budget no matter how much the images themselves were compressed.
 
 const RESULT_PREFIX = "designcheck:result:";
 const HISTORY_KEY = "designcheck:history";
 const MAX_HISTORY = 30;
+const DB_NAME = "designcheck-images";
+const DB_VERSION = 1;
+const STORE_NAME = "images";
 
 type HistoryEntry = {
   id: string;
@@ -20,6 +32,12 @@ type HistoryEntry = {
   issueCount: number;
   isDemo: boolean;
 };
+
+interface ImageBundle {
+  figmaThumbnail?: string;
+  websiteScreenshot?: string;
+  responsiveScreenshots?: (string | undefined)[];
+}
 
 function safe<T>(fn: () => T, fallback: T): T {
   try {
@@ -36,26 +54,107 @@ function isQuotaExceeded(err: unknown): boolean {
   );
 }
 
-// A full-page website screenshot plus a design thumbnail can add up to
-// several megabytes — easily enough to exceed a browser's localStorage
-// quota (typically ~5-10MB per site). Rather than let that failure
-// silently drop the whole analysis (which used to send people to a
-// results page that was never actually saved), this strips the large
-// embedded images and retries — keeping every score, issue, and text
-// field intact, just without the screenshots the UI already knows how
-// to display an empty state for.
-function stripImages(result: AnalysisResult): AnalysisResult {
+// ---- IndexedDB (screenshots + thumbnails) ---------------------------------
+
+function openDb(): Promise<IDBDatabase | null> {
+  return new Promise((resolve) => {
+    if (typeof indexedDB === "undefined") return resolve(null);
+    try {
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = () => {
+        if (!req.result.objectStoreNames.contains(STORE_NAME)) {
+          req.result.createObjectStore(STORE_NAME);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function putImages(id: string, images: ImageBundle): Promise<boolean> {
+  const db = await openDb();
+  if (!db) return false;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(STORE_NAME, "readwrite");
+      tx.objectStore(STORE_NAME).put(images, id);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+      tx.onabort = () => resolve(false);
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+async function getImages(id: string): Promise<ImageBundle | null> {
+  const db = await openDb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(STORE_NAME, "readonly");
+      const req = tx.objectStore(STORE_NAME).get(id);
+      req.onsuccess = () => resolve((req.result as ImageBundle) ?? null);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function deleteImagesFor(id: string): Promise<void> {
+  const db = await openDb();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    try {
+      const tx = db.transaction(STORE_NAME, "readwrite");
+      tx.objectStore(STORE_NAME).delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
+function extractImages(result: AnalysisResult): ImageBundle {
+  return {
+    figmaThumbnail: result.figma.thumbnailUrl,
+    websiteScreenshot: result.website.screenshotDataUrl,
+    responsiveScreenshots: result.responsive.map((r) => r.screenshotDataUrl),
+  };
+}
+
+function hasAnyImage(images: ImageBundle): boolean {
+  return Boolean(images.figmaThumbnail || images.websiteScreenshot || images.responsiveScreenshots?.some(Boolean));
+}
+
+function withoutImages(result: AnalysisResult): AnalysisResult {
   return {
     ...result,
     figma: { ...result.figma, thumbnailUrl: undefined },
     website: { ...result.website, screenshotDataUrl: undefined },
     responsive: result.responsive.map((r) => ({ ...r, screenshotDataUrl: undefined })),
-    warnings: [
-      ...result.warnings,
-      "Screenshots couldn't be saved — your browser's storage for this site is nearly full (the app automatically freed space by removing some older analyses; you can also do this yourself anytime from History). Every score, issue, and detail below is still fully accurate; only the side-by-side images are missing.",
-    ],
   };
 }
+
+function withImages(result: AnalysisResult, images: ImageBundle): AnalysisResult {
+  return {
+    ...result,
+    figma: { ...result.figma, thumbnailUrl: images.figmaThumbnail ?? result.figma.thumbnailUrl },
+    website: { ...result.website, screenshotDataUrl: images.websiteScreenshot ?? result.website.screenshotDataUrl },
+    responsive: result.responsive.map((r, i) => ({
+      ...r,
+      screenshotDataUrl: images.responsiveScreenshots?.[i] ?? r.screenshotDataUrl,
+    })),
+  };
+}
+
+// ---- localStorage (metadata: scores, issues, text) -------------------------
 
 function writeHistoryEntry(result: AnalysisResult) {
   const history = loadHistory();
@@ -74,12 +173,11 @@ function writeHistoryEntry(result: AnalysisResult) {
 
 export type SaveOutcome = "full" | "without-images" | "failed";
 
-// If freeing up this one entry's images still doesn't fit, the browser's
-// storage for this site is full from *previous* saved analyses piling up
-// (every Demo run and real analysis gets saved) — not just this one being
-// large. Rather than keep telling the designer to go clear things
-// manually, evict the oldest saved analyses automatically, oldest first,
-// until the new one fits or there's nothing left to evict.
+// With images no longer part of this payload, what's left (scores, issues,
+// warnings, plain text) is small — a handful of KB even for a large
+// analysis — so this should essentially always fit. Eviction stays as a
+// defensive fallback for a browser with almost no quota left at all, not
+// the normal path anymore.
 function evictOldestUntilFits(newEntryJson: string, key: string): boolean {
   const history = loadHistory();
   // Oldest last, since loadHistory()/writeHistoryEntry() keep newest-first.
@@ -88,6 +186,7 @@ function evictOldestUntilFits(newEntryJson: string, key: string): boolean {
     if (victim.id === key.replace(RESULT_PREFIX, "")) continue; // never evict the one we're saving
     localStorage.removeItem(RESULT_PREFIX + victim.id);
     history.splice(i, 1);
+    void deleteImagesFor(victim.id);
     try {
       localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
       localStorage.setItem(key, newEntryJson);
@@ -100,42 +199,40 @@ function evictOldestUntilFits(newEntryJson: string, key: string): boolean {
   return false;
 }
 
-export function saveAnalysis(result: AnalysisResult): SaveOutcome {
+export async function saveAnalysis(result: AnalysisResult): Promise<SaveOutcome> {
   const key = RESULT_PREFIX + result.id;
+  const images = extractImages(result);
+  const withImagesToSave = hasAnyImage(images);
 
+  const imagesSaved = withImagesToSave ? await putImages(result.id, images) : true;
+
+  const metaOnly = withoutImages(result);
+  if (withImagesToSave && !imagesSaved) {
+    metaOnly.warnings = [
+      ...metaOnly.warnings,
+      "Screenshots couldn't be saved in this browser (its image storage is unavailable or full). Every score, issue, and detail below is still fully accurate; only the side-by-side images are missing.",
+    ];
+  }
+  const metaJson = JSON.stringify(metaOnly);
+
+  let metaSaved = false;
   try {
-    localStorage.setItem(key, JSON.stringify(result));
-    writeHistoryEntry(result);
-    return "full";
+    localStorage.setItem(key, metaJson);
+    metaSaved = true;
   } catch (err) {
-    if (!isQuotaExceeded(err)) return "failed";
+    if (isQuotaExceeded(err) && evictOldestUntilFits(metaJson, key)) metaSaved = true;
   }
+  if (!metaSaved) return "failed";
 
-  // Retry without this entry's own large embedded images.
-  const strippedJson = JSON.stringify(stripImages(result));
-  try {
-    localStorage.setItem(key, strippedJson);
-    writeHistoryEntry(result);
-    return "without-images";
-  } catch (err) {
-    if (!isQuotaExceeded(err)) return "failed";
-  }
-
-  // Still doesn't fit — the accumulated history itself is the problem.
-  // Free space by evicting old analyses, then try the stripped version
-  // one more time.
-  if (evictOldestUntilFits(strippedJson, key)) {
-    writeHistoryEntry(result);
-    return "without-images";
-  }
-
-  return "failed";
+  writeHistoryEntry(result);
+  return withImagesToSave && !imagesSaved ? "without-images" : "full";
 }
 
 // Wipes every saved analysis and history entry in this browser — the
 // blunt, one-click way to recover storage space, offered on the History
 // page next to deleting entries one at a time.
-export function clearAllAnalyses() {
+export async function clearAllAnalyses(): Promise<void> {
+  const ids = loadHistory().map((h) => h.id);
   safe(() => {
     for (const entry of loadHistory()) {
       localStorage.removeItem(RESULT_PREFIX + entry.id);
@@ -143,13 +240,18 @@ export function clearAllAnalyses() {
     localStorage.removeItem(HISTORY_KEY);
     return null;
   }, null);
+  await Promise.all(ids.map((id) => deleteImagesFor(id)));
 }
 
-export function loadAnalysis(id: string): AnalysisResult | null {
-  return safe(() => {
+export async function loadAnalysis(id: string): Promise<AnalysisResult | null> {
+  const metaOnly = safe(() => {
     const raw = localStorage.getItem(RESULT_PREFIX + id);
     return raw ? (JSON.parse(raw) as AnalysisResult) : null;
   }, null);
+  if (!metaOnly) return null;
+
+  const images = await getImages(id);
+  return images ? withImages(metaOnly, images) : metaOnly;
 }
 
 export function loadHistory(): HistoryEntry[] {
@@ -159,13 +261,14 @@ export function loadHistory(): HistoryEntry[] {
   }, []);
 }
 
-export function deleteAnalysis(id: string) {
+export async function deleteAnalysis(id: string): Promise<void> {
   safe(() => {
     localStorage.removeItem(RESULT_PREFIX + id);
     const next = loadHistory().filter((h) => h.id !== id);
     localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
     return null;
   }, null);
+  await deleteImagesFor(id);
 }
 
 export type { HistoryEntry };

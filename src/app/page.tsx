@@ -84,8 +84,8 @@ export default function LandingPage() {
     timerRef.current = null;
   };
 
-  const goToResult = (result: AnalysisResult) => {
-    const outcome = saveAnalysis(result);
+  const goToResult = async (result: AnalysisResult) => {
+    const outcome = await saveAnalysis(result);
     if (outcome === "failed") {
       setError(
         "The analysis finished, but this browser couldn't save the result (its storage is full). Try clearing some space (History → delete old analyses) and running it again."
@@ -176,7 +176,7 @@ export default function LandingPage() {
       if (designSource === "svg" && svgExtraction?.thumbnailUrl) {
         result.figma.thumbnailUrl = svgExtraction.thumbnailUrl;
       }
-      goToResult(result);
+      await goToResult(result);
     } catch {
       setError(
         designSource === "svg"
@@ -195,7 +195,7 @@ export default function LandingPage() {
     try {
       const res = await fetch("/api/demo");
       const data = await res.json();
-      goToResult(data as AnalysisResult);
+      await goToResult(data as AnalysisResult);
     } catch {
       setError("Couldn't load the demo. Please try again.");
     } finally {

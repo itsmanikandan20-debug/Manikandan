@@ -18,7 +18,7 @@ function DemoSiteInner() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (analysisId) setAnalysis(loadAnalysis(analysisId));
+    if (analysisId) loadAnalysis(analysisId).then(setAnalysis);
   }, [analysisId]);
 
   const issue: Issue | undefined = analysis?.issues.find((i) => i.id === issueId);

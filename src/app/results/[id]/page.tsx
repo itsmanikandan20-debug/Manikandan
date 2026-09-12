@@ -26,7 +26,7 @@ export default function ResultsPage() {
 
   useEffect(() => {
     if (!params.id) return;
-    setAnalysis(loadAnalysis(params.id));
+    loadAnalysis(params.id).then(setAnalysis);
   }, [params.id]);
 
   const filteredIssues = useMemo(() => {
@@ -43,7 +43,7 @@ export default function ResultsPage() {
     setAnalysis((prev) => {
       if (!prev) return prev;
       const next: AnalysisResult = { ...prev, issues: prev.issues.map((i) => (i.id === updated.id ? updated : i)) };
-      saveAnalysis(next);
+      void saveAnalysis(next);
       return next;
     });
   }

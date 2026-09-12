@@ -13,13 +13,13 @@ export default function HistoryPage() {
   }, []);
 
   function remove(id: string) {
-    deleteAnalysis(id);
+    void deleteAnalysis(id);
     setHistory(loadHistory());
   }
 
   function clearAll() {
     if (!confirm(`Delete all ${history.length} saved analyses from this browser? This can't be undone.`)) return;
-    clearAllAnalyses();
+    void clearAllAnalyses();
     setHistory([]);
   }
 

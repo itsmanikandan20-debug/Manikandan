@@ -13,7 +13,7 @@ export default function ReportPage() {
   const [analysis, setAnalysis] = useState<AnalysisResult | null | undefined>(undefined);
 
   useEffect(() => {
-    if (params.id) setAnalysis(loadAnalysis(params.id));
+    if (params.id) loadAnalysis(params.id).then(setAnalysis);
   }, [params.id]);
 
   if (analysis === undefined) return null;
