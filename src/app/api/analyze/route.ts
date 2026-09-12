@@ -151,8 +151,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: err.message, code: "WEBSITE_ERROR" }, { status: 400 });
     }
     console.error("Analyze failed:", err);
+    const detail = err instanceof Error ? err.message : String(err);
     return NextResponse.json(
-      { error: "Something went wrong during analysis. Please try again." },
+      { error: `Something went wrong during analysis: ${detail}. Please try again.` },
       { status: 500 }
     );
   }

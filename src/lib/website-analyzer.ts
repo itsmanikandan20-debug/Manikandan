@@ -444,6 +444,15 @@ export async function analyzeWebsite(url: string, viewport: Viewport): Promise<W
       isDemo: false,
       botChallengeDetected,
     };
+  } catch (err) {
+    // Anything below this point that throws (a Playwright internal error,
+    // a bad selector, whatever) used to surface to the designer as an
+    // opaque "Something went wrong" with no way to tell what actually
+    // failed. Re-wrapping as WebsiteAnalysisError keeps the real message
+    // and routes it through the existing 400/WEBSITE_ERROR handling in
+    // the API route instead of the generic 500 catch-all.
+    if (err instanceof WebsiteAnalysisError) throw err;
+    throw new WebsiteAnalysisError(`Ran into an unexpected problem analyzing ${normalizedUrl}: ${(err as Error).message}`);
   } finally {
     await browser.close();
   }
