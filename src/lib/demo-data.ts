@@ -20,9 +20,9 @@ export function buildDemoAnalysis(): AnalysisResult {
   const website = buildDemoWebsite(VIEWPORTS[0]);
   const page = "Home";
 
-  const matches = matchElements(figma.elements, website.elements, figma.frameWidth);
+  const matchResult = matchElements(figma.elements, website.elements, figma.frameWidth);
   const issues = [
-    ...compareDesignToWebsite(figma, website, matches, page),
+    ...compareDesignToWebsite(figma, website, matchResult, page),
     ...detectUxIssues(website, page),
   ];
 
@@ -38,7 +38,7 @@ export function buildDemoAnalysis(): AnalysisResult {
     isDemo: true,
     figma,
     website,
-    matches,
+    matches: matchResult.pairs,
     issues: numberedIssues,
     overallScore,
     categoryScores,

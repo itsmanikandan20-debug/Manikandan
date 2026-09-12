@@ -86,10 +86,10 @@ export async function POST(req: Request) {
   try {
     const [figma, website] = await Promise.all([getFigma(), analyzeWebsite(websiteUrl, viewport)]);
 
-    const matches = matchElements(figma.elements, website.elements, figma.frameWidth);
+    const matchResult = matchElements(figma.elements, website.elements, figma.frameWidth);
     const page = figma.frameName || "Home";
     const issues = numberIssues([
-      ...compareDesignToWebsite(figma, website, matches, page),
+      ...compareDesignToWebsite(figma, website, matchResult, page),
       ...detectUxIssues(website, page),
     ]);
 
@@ -132,7 +132,7 @@ export async function POST(req: Request) {
       isDemo: false,
       figma,
       website,
-      matches,
+      matches: matchResult.pairs,
       issues,
       overallScore,
       categoryScores,

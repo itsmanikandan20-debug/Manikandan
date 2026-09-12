@@ -33,6 +33,7 @@ function classify(tag: string, name: string, fontSize: number | undefined, textL
   if (n.includes("button") || n.includes("cta")) return "button";
   if (n.includes("icon")) return "icon";
   if (n.includes("input") || n.includes("field")) return "input";
+  if (n.includes("background") || n.includes("bg") || n.includes("backdrop")) return "section";
   if (tag === "image") return "image";
   if (tag === "g") return "container";
   return "icon"; // bare shape (rect/circle/path/polygon) with no useful name
@@ -148,6 +149,14 @@ export function parseSvgToFigmaExtraction(svgText: string, fileName: string): Fi
       const solidColor = gradientStops ? undefined : rgbOrNamedColor(rawFill);
       const strokeWidth = parseFloat(el.getAttribute("stroke-width") || style.strokeWidth || "0") || 0;
       const strokeColor = strokeWidth > 0 ? rgbOrNamedColor(el.getAttribute("stroke") || style.stroke) : undefined;
+      // A named top-level group (tag === "g" with an id) IS a section
+      // boundary itself, not something nested inside one — nearestNamedSection
+      // walks its ANCESTORS, which for a top-level group is nobody, so it
+      // would otherwise fall back to the generic "Design" bucket while its
+      // own children correctly get labeled with this group's name. Label it
+      // with its own name instead so section-grouping keeps a section's
+      // container together with its contents.
+      const section = tag === "g" ? name : nearestNamedSection(el, mounted);
 
       counter += 1;
       elements.push({
@@ -169,7 +178,7 @@ export function parseSvgToFigmaExtraction(svgText: string, fileName: string): Fi
         borderRadius: tag === "rect" ? parseFloat(el.getAttribute("rx") || "0") || undefined : undefined,
         borderColor: strokeColor,
         borderWidth: strokeWidth || undefined,
-        section: nearestNamedSection(el, mounted),
+        section,
       });
     });
 

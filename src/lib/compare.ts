@@ -1,13 +1,5 @@
-import type {
-  DesignElement,
-  FigmaExtraction,
-  WebsiteExtraction,
-  MatchedPair,
-  Issue,
-  IssueCategory,
-  Severity,
-  ElementType,
-} from "./types";
+import type { DesignElement, FigmaExtraction, WebsiteExtraction, Issue, IssueCategory, Severity, ElementType } from "./types";
+import type { MatchResult, SectionDiff } from "./matcher";
 import { normalizeText } from "./similarity";
 import { makeId } from "./id";
 
@@ -102,14 +94,14 @@ function colorCategoryFor(type: ElementType): IssueCategory {
 export function compareDesignToWebsite(
   figma: FigmaExtraction,
   website: WebsiteExtraction,
-  matches: MatchedPair[],
+  matchResult: MatchResult,
   page: string
 ): Issue[] {
   const issues: Issue[] = [];
   const figmaById = byId(figma.elements);
   const websiteById = byId(website.elements);
 
-  for (const pair of matches) {
+  for (const pair of matchResult.pairs) {
     const f = pair.figmaId ? figmaById.get(pair.figmaId) : undefined;
     const w = pair.websiteId ? websiteById.get(pair.websiteId) : undefined;
 
@@ -126,9 +118,65 @@ export function compareDesignToWebsite(
     }
   }
 
+  for (const section of matchResult.missingSections) issues.push(missingSectionIssue(section, page));
+  for (const section of matchResult.extraSections) issues.push(extraSectionIssue(section, page));
+
   issues.push(...compareContainerColors(figma.elements, website.elements, page));
 
   return issues;
+}
+
+// A whole section present in the design with nothing corresponding on the
+// live website — reported once, instead of one "missing X" issue per
+// element that happened to be inside it.
+function missingSectionIssue(section: SectionDiff, page: string): Issue {
+  const box = sectionBoundingBox(section.elements);
+  return makeIssue({
+    category: "content",
+    severity: "high",
+    title: `Missing section: "${section.name}"`,
+    section: section.name,
+    page,
+    description: `The "${section.name}" section exists in the Figma design but wasn't found anywhere on the live website.`,
+    expected: `A "${section.name}" section with ${section.elements.length} element${section.elements.length === 1 ? "" : "s"}`,
+    actual: "Not present on the website",
+    difference: "Entire section missing",
+    correction: `Add the "${section.name}" section to the live website, matching the Figma design.`,
+    matchConfidence: null,
+    figmaElementId: section.elements[0]?.id,
+    boundingBox: box,
+  });
+}
+
+// A whole section on the live website with no corresponding section in the
+// design — same idea, the other direction.
+function extraSectionIssue(section: SectionDiff, page: string): Issue {
+  const box = sectionBoundingBox(section.elements);
+  return makeIssue({
+    category: "extra-text",
+    severity: "medium",
+    title: `Extra section not in Figma: "${section.name}"`,
+    section: section.name,
+    page,
+    description: `The "${section.name}" section appears on the live website but has no corresponding section in the Figma design.`,
+    expected: "Not present in the design",
+    actual: `A "${section.name}" section with ${section.elements.length} element${section.elements.length === 1 ? "" : "s"}`,
+    difference: "Extra, unplanned section",
+    correction: "Confirm with design whether this section should be removed or added to the source design file.",
+    matchConfidence: null,
+    websiteElementId: section.elements[0]?.id,
+    websiteSelector: section.elements[0]?.selector,
+    boundingBox: box,
+  });
+}
+
+function sectionBoundingBox(elements: DesignElement[]): { x: number; y: number; width: number; height: number } | undefined {
+  if (elements.length === 0) return undefined;
+  const minX = Math.min(...elements.map((e) => e.x));
+  const minY = Math.min(...elements.map((e) => e.y));
+  const maxX = Math.max(...elements.map((e) => e.x + e.width));
+  const maxY = Math.max(...elements.map((e) => e.y + e.height));
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
 // Missing/extra element issues are routed by element type: an image or

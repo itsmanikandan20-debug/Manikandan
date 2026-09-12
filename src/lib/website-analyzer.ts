@@ -203,7 +203,14 @@ const EXTRACT_SCRIPT = `(() => {
       imageUrl,
       href: tag === 'a' ? el.getAttribute('href') : null,
       selector: cssSelector(el),
-      section: isContainer ? tag : sectionFor(el),
+      // sectionFor(el) checks el's own tag first, so calling it on a
+      // container itself already returns that container's own
+      // aria-label/id (falling back to its capitalized tag name only if
+      // neither is set) — using the raw lowercase tag instead meant a
+      // container's own section label ("nav") didn't match the friendly
+      // name ("Navigation") its own children got via the same function,
+      // splitting one section into two mismatched groups.
+      section: sectionFor(el),
       isContainer,
       autoLayout: style.display === 'flex' ? (style.flexDirection && style.flexDirection.startsWith('row') ? 'horizontal' : 'vertical') : 'none',
     });
