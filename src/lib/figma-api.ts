@@ -75,6 +75,10 @@ interface FigmaFileResponse {
   name: string;
   document: FigmaNode;
 }
+interface FigmaNodesResponse {
+  name: string;
+  nodes: Record<string, { document: FigmaNode } | null>;
+}
 
 async function figmaFetch<T>(path: string, token: string): Promise<T> {
   // OAuth access tokens (what every designer's session holds) go in a
@@ -89,6 +93,13 @@ async function figmaFetch<T>(path: string, token: string): Promise<T> {
   }
   if (res.status === 404) {
     throw new FigmaApiError("Figma file not found. Make sure the link is correct and the file is shared with your account.");
+  }
+  if (res.status === 429) {
+    const retryAfter = res.headers.get("Retry-After");
+    const wait = retryAfter ? `about ${retryAfter} seconds` : "a minute or two";
+    throw new FigmaApiError(
+      `Figma is temporarily rate-limiting requests to this file (this happens with large/complex files, or after several attempts in a row). Please wait ${wait} and try again.`
+    );
   }
   if (!res.ok) {
     throw new FigmaApiError(`Figma API error (${res.status}). Please try again in a moment.`);
@@ -224,8 +235,36 @@ function findNodeById(node: FigmaNode, id: string): FigmaNode | null {
 
 export async function fetchFigmaExtraction(figmaUrl: string, token: string): Promise<FigmaExtraction> {
   const { fileKey, nodeId } = parseFigmaUrl(figmaUrl);
-  const file = await figmaFetch<FigmaFileResponse>(`/files/${fileKey}`, token);
-  const frame = await findTargetFrame(file.document, nodeId);
+
+  // Figma's rate limits are cost-based, and GET /files/:key — which reads
+  // the ENTIRE file (every page, frame, and layer) — is by far the most
+  // expensive call available. When the link already points at a specific
+  // frame (Figma → right-click → "Copy link to selection" includes a
+  // node-id), GET /files/:key/nodes fetches only that frame's subtree,
+  // which is dramatically cheaper and exactly what we need. The full-file
+  // fetch is now only a fallback for a bare file link with no frame
+  // selected.
+  let fileName: string;
+  let frame: FigmaNode;
+  if (nodeId) {
+    const data = await figmaFetch<FigmaNodesResponse>(
+      `/files/${fileKey}/nodes?ids=${encodeURIComponent(nodeId)}`,
+      token
+    );
+    fileName = data.name;
+    const found = data.nodes[nodeId]?.document;
+    if (!found) {
+      throw new FigmaApiError(
+        "Couldn't find that frame in the file — the link may be stale. Re-select the frame in Figma and copy its link again."
+      );
+    }
+    frame = found;
+  } else {
+    const file = await figmaFetch<FigmaFileResponse>(`/files/${fileKey}`, token);
+    fileName = file.name;
+    frame = await findTargetFrame(file.document, null);
+  }
+
   const box = frame.absoluteBoundingBox ?? { x: 0, y: 0, width: 1440, height: 900 };
 
   const elements = extractElements(frame, { x: box.x, y: box.y });
@@ -243,7 +282,7 @@ export async function fetchFigmaExtraction(figmaUrl: string, token: string): Pro
 
   return {
     fileKey,
-    fileName: file.name,
+    fileName,
     pageName: "—",
     frameName: frame.name,
     frameWidth: Math.round(box.width),
