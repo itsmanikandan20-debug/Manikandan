@@ -142,13 +142,23 @@ export default function LandingPage() {
       setActiveStep(step);
     }, 2200);
 
+    // The server only needs the SVG's extracted elements to run the
+    // comparison — the rendered thumbnail image is purely for display,
+    // and the browser already has it. Sending it up and having the
+    // server echo it straight back would roughly double an already large
+    // payload for no reason, risking the server's request-size limit on
+    // a complex SVG. Strip it before sending, restore it from the local
+    // copy once the response comes back.
+    const figmaExtractionForRequest =
+      designSource === "svg" && svgExtraction ? { ...svgExtraction, thumbnailUrl: undefined } : undefined;
+
     try {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           figmaUrl: designSource === "figma" ? figmaUrl : undefined,
-          figmaExtraction: designSource === "svg" ? svgExtraction : undefined,
+          figmaExtraction: figmaExtractionForRequest,
           websiteUrl,
           viewportIndex,
           checkResponsive,
@@ -162,9 +172,17 @@ export default function LandingPage() {
       }
       stopStepper();
       setActiveStep(STEP_LABELS.length - 1);
-      goToResult(data as AnalysisResult);
+      const result = data as AnalysisResult;
+      if (designSource === "svg" && svgExtraction?.thumbnailUrl) {
+        result.figma.thumbnailUrl = svgExtraction.thumbnailUrl;
+      }
+      goToResult(result);
     } catch {
-      setError("Couldn't reach the server. Check your connection and try again.");
+      setError(
+        designSource === "svg"
+          ? "Couldn't reach the server — if your SVG file is large, it may be too big to send. Try a simpler frame, or a smaller export."
+          : "Couldn't reach the server. Check your connection and try again."
+      );
     } finally {
       stopStepper();
       setLoading(false);
