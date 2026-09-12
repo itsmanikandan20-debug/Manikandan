@@ -85,7 +85,18 @@ export default function LandingPage() {
   };
 
   const goToResult = (result: AnalysisResult) => {
-    saveAnalysis(result);
+    const outcome = saveAnalysis(result);
+    if (outcome === "failed") {
+      setError(
+        "The analysis finished, but this browser couldn't save the result (its storage is full). Try clearing some space (History → delete old analyses) and running it again."
+      );
+      return;
+    }
+    if (outcome === "without-images") {
+      // Saved successfully, just without the large screenshots — still a
+      // fully usable result (issue list, scores, report all work).
+      console.warn("Saved analysis without screenshots — browser storage was nearly full.");
+    }
     router.push(`/results/${result.id}`);
   };
 
@@ -217,6 +228,13 @@ export default function LandingPage() {
             >
               Upload SVG export
             </button>
+          </div>
+        )}
+
+        {!loading && error && (
+          <div className="mb-5 flex items-start gap-2 rounded-xl border border-severity-high/30 bg-severity-high-bg px-3.5 py-3 text-sm text-severity-high">
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            <span>{error}</span>
           </div>
         )}
 
@@ -382,13 +400,6 @@ export default function LandingPage() {
               />
               Also run responsive checks at the other 5 viewport sizes (slower)
             </label>
-
-            {error && (
-              <div className="flex items-start gap-2 rounded-xl border border-severity-high/30 bg-severity-high-bg px-3.5 py-3 text-sm text-severity-high">
-                <AlertCircle size={16} className="mt-0.5 shrink-0" />
-                <span>{error}</span>
-              </div>
-            )}
 
             <button
               type="submit"

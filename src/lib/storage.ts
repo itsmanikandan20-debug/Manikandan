@@ -29,23 +29,64 @@ function safe<T>(fn: () => T, fallback: T): T {
   }
 }
 
-export function saveAnalysis(result: AnalysisResult) {
-  safe(() => {
+function isQuotaExceeded(err: unknown): boolean {
+  return (
+    err instanceof DOMException &&
+    (err.name === "QuotaExceededError" || err.name === "NS_ERROR_DOM_QUOTA_REACHED" || err.code === 22)
+  );
+}
+
+// A full-page website screenshot plus a design thumbnail can add up to
+// several megabytes — easily enough to exceed a browser's localStorage
+// quota (typically ~5-10MB per site). Rather than let that failure
+// silently drop the whole analysis (which used to send people to a
+// results page that was never actually saved), this strips the large
+// embedded images and retries — keeping every score, issue, and text
+// field intact, just without the screenshots the UI already knows how
+// to display an empty state for.
+function stripImages(result: AnalysisResult): AnalysisResult {
+  return {
+    ...result,
+    figma: { ...result.figma, thumbnailUrl: undefined },
+    website: { ...result.website, screenshotDataUrl: undefined },
+    responsive: result.responsive.map((r) => ({ ...r, screenshotDataUrl: undefined })),
+  };
+}
+
+function writeHistoryEntry(result: AnalysisResult) {
+  const history = loadHistory();
+  const entry: HistoryEntry = {
+    id: result.id,
+    createdAt: result.createdAt,
+    figmaUrl: result.figmaUrl,
+    websiteUrl: result.websiteUrl,
+    overallScore: result.overallScore,
+    issueCount: result.issues.length,
+    isDemo: result.isDemo,
+  };
+  const next = [entry, ...history.filter((h) => h.id !== result.id)].slice(0, MAX_HISTORY);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+}
+
+export type SaveOutcome = "full" | "without-images" | "failed";
+
+export function saveAnalysis(result: AnalysisResult): SaveOutcome {
+  try {
     localStorage.setItem(RESULT_PREFIX + result.id, JSON.stringify(result));
-    const history = loadHistory();
-    const entry: HistoryEntry = {
-      id: result.id,
-      createdAt: result.createdAt,
-      figmaUrl: result.figmaUrl,
-      websiteUrl: result.websiteUrl,
-      overallScore: result.overallScore,
-      issueCount: result.issues.length,
-      isDemo: result.isDemo,
-    };
-    const next = [entry, ...history.filter((h) => h.id !== result.id)].slice(0, MAX_HISTORY);
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
-    return null;
-  }, null);
+    writeHistoryEntry(result);
+    return "full";
+  } catch (err) {
+    if (!isQuotaExceeded(err)) return "failed";
+  }
+
+  // Retry once, without the large embedded images.
+  try {
+    localStorage.setItem(RESULT_PREFIX + result.id, JSON.stringify(stripImages(result)));
+    writeHistoryEntry(result);
+    return "without-images";
+  } catch {
+    return "failed";
+  }
 }
 
 export function loadAnalysis(id: string): AnalysisResult | null {
