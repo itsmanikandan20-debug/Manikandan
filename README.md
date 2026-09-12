@@ -2,10 +2,14 @@
 
 **A Figma-to-Live-Website QA tool.** Paste a Figma design link and a live
 website link, pick a screen size, and DesignCheck compares them — flagging
-mismatched button text, wrong colors, missing images, spacing drift,
-broken links, and more. Designers review and annotate each issue; the app
-generates a clean, exportable QA report for developers, who can click any
-issue to jump straight to it on the live site.
+meaningful differences only: wrong/missing/extra text, meaningful color
+differences, wrong/missing/extra images and icons, broken links, buttons
+with no destination, and forms with no way to submit. It deliberately does
+**not** report 1-2px spacing, padding, font-size, alignment, or
+border-radius nitpicks — those aren't worth a developer's time. Designers
+review and annotate each issue; the app generates a clean, exportable QA
+report for developers, who can click any issue to jump straight to it on
+the live site.
 
 Built for **multiple designers sharing one deployment** — each person
 signs in with their own Figma account (OAuth), and DesignCheck only ever
@@ -66,17 +70,15 @@ DesignCheck can read your actual design in two completely different ways.
    choose that file.
 3. That's it — no Figma account, no API keys, no waiting on anyone. This
    reads the SVG entirely in your own browser.
-4. **What's not included this way:** Figma's Auto Layout spacing/padding
-   rules aren't present in an SVG file, so the few spacing-specific checks
-   that need that data are skipped for an SVG-sourced design (everything
-   else — text, color, size, position — still compares normally).
+4. DesignCheck doesn't report spacing/padding/alignment differences at all
+   (from any design source, not just SVG) — see "What gets checked" below.
 
 **Option B: "Connect Figma" sign-in (OAuth).** Reads the file live from
-Figma's servers, so it always reflects the current version and includes
-Auto Layout spacing data — but needs a one-time setup by whoever deploys
-DesignCheck (see below), and each real Figma API request needs the app
-to have been approved by Figma (see "A note on Figma's app review" further
-down) or it will be rate-limited hard while still in Draft.
+Figma's servers, so it always reflects the current version — but needs a
+one-time setup by whoever deploys DesignCheck (see below), and each real
+Figma API request needs the app to have been approved by Figma (see "A
+note on Figma's app review" further down) or it will be rate-limited hard
+while still in Draft.
 
 ### Setting up Option B: "Connect Figma" sign-in
 
@@ -206,6 +208,34 @@ out in the "Known limitations" section below too.
 
 ---
 
+## What gets checked
+
+DesignCheck is scoped to differences meaningful enough to send to a
+developer — not pixel-hunting. Results are grouped into 8 categories:
+
+| Category | Catches |
+|---|---|
+| **Content** | Wrong/missing text, different headings, different button text |
+| **Extra Text** | Copy on the live site with no corresponding element in the design |
+| **Colors** | Meaningful background/text/button/border color or gradient differences |
+| **Images** | Wrong/missing/extra images (including images that fail to load) |
+| **Icons** | Missing/extra icons, and icon color differences |
+| **Links** | Links that return an error or don't resolve |
+| **Buttons** | Buttons/links with no real destination configured (heuristic — nothing is actually clicked) |
+| **Forms** | Forms with input fields but no submit control (heuristic — nothing is actually submitted) |
+
+**Deliberately not reported:** 1-2px spacing/padding differences, tiny
+font-size or alignment nudges, and border-radius mismatches. A small color
+difference that could be screenshot/rounding noise (a fixed color-distance
+threshold) is filtered out too. None of this means the tool can't *see*
+those things — it's a scope decision, so designers aren't sent a wall of
+nitpicks a developer wouldn't act on.
+
+The Buttons/Forms checks are intentionally structural, not a real
+click/submit test: actually clicking buttons or submitting forms on a live
+production site could trigger real side effects (navigation, real
+submissions, sent emails), so DesignCheck never does that automatically.
+
 ## What's real vs. simplified (read this before showing it off)
 
 This project follows a principle of **never faking a result** — if
@@ -268,10 +298,10 @@ guessing or hard-coding it:
   likely overflow, overlapping elements, tiny tap targets, and probable
   text cut-off from the page's rendered layout, clearly labeled as
   estimates rather than guarantees.
-- **Figma section/spacing detection** relies on your Figma frame using
-  named top-level frames (e.g. "Header", "Hero", "Footer") and Auto Layout
-  for the most useful results. A file with no Auto Layout still compares
-  fine on position/size/color/text — just without the spacing/gap checks.
+- **Section-level background color detection** matches Figma sections to
+  website sections by name (e.g. a Figma frame named "Hero" is matched to
+  a website section named "Hero") — name your top-level Figma frames to
+  match your page's actual sections for the most useful results.
 
 ---
 

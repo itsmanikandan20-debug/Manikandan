@@ -62,8 +62,9 @@ export default function ReportPage() {
           <div>
             <dt className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Overall Match Score</dt>
             <dd className="text-ink">
-              {analysis.overallScore}% (Visual {analysis.categoryScores.visual}% · Content {analysis.categoryScores.content}% ·
-              Layout {analysis.categoryScores.layout}% · UX {analysis.categoryScores.ux}%)
+              {analysis.overallScore}% (Content {analysis.categoryScores.content}% · Extra Text {analysis.categoryScores.extraText}% ·
+              Colors {analysis.categoryScores.colors}% · Images {analysis.categoryScores.images}% · Icons {analysis.categoryScores.icons}% ·
+              Links {analysis.categoryScores.links}% · Buttons {analysis.categoryScores.buttons}% · Forms {analysis.categoryScores.forms}%)
             </dd>
           </div>
         </dl>

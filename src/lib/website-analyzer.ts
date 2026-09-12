@@ -84,6 +84,8 @@ interface RawElement {
   backgroundColor: string;
   gradientStops: string[] | null;
   borderRadius: number;
+  borderColor: string | null;
+  borderWidth: number;
   paddingTop: number;
   paddingRight: number;
   paddingBottom: number;
@@ -172,6 +174,8 @@ const EXTRACT_SCRIPT = `(() => {
     if (tag === 'img') imageUrl = el.currentSrc || el.getAttribute('src');
 
     const gapRaw = style.gap || style.rowGap || '0px';
+    const borderWidthPx = parseFloat(style.borderTopWidth) || 0;
+    const borderColorHex = borderWidthPx > 0 ? rgbToHex(style.borderTopColor) : null;
 
     results.push({
       tag,
@@ -188,6 +192,8 @@ const EXTRACT_SCRIPT = `(() => {
       backgroundColor: rgbToHex(style.backgroundColor),
       gradientStops: extractGradientStops(style.backgroundImage),
       borderRadius: parseFloat(style.borderRadius) || 0,
+      borderColor: borderColorHex,
+      borderWidth: borderWidthPx,
       paddingTop: parseFloat(style.paddingTop) || 0,
       paddingRight: parseFloat(style.paddingRight) || 0,
       paddingBottom: parseFloat(style.paddingBottom) || 0,
@@ -246,6 +252,8 @@ function toDesignElements(raw: RawElement[]): DesignElement[] {
     backgroundColor: r.backgroundColor ?? undefined,
     gradientStops: r.gradientStops ?? undefined,
     borderRadius: r.borderRadius,
+    borderColor: r.borderColor ?? undefined,
+    borderWidth: r.borderWidth,
     paddingTop: r.paddingTop,
     paddingRight: r.paddingRight,
     paddingBottom: r.paddingBottom,
@@ -285,6 +293,67 @@ async function findBrokenLinks(page: Page, limit = 15): Promise<string[]> {
   );
 
   return broken;
+}
+
+// Non-destructive structural check: an <a> styled/used as a button with no
+// real destination (empty href, "#", or a javascript:void placeholder) is
+// a common, objectively-detectable dev mistake. Native <button> elements
+// are deliberately NOT flagged here — most rely on a JS click handler that
+// can't be verified from markup alone, and guessing would produce mostly
+// false positives. This never clicks anything, so it can't trigger a real
+// navigation or side effect on the live site.
+async function findBrokenButtons(page: Page, limit = 8): Promise<string[]> {
+  return page.evaluate((max) => {
+    function isPlaceholderHref(href: string | null): boolean {
+      if (href === null) return true;
+      const h = href.trim().toLowerCase();
+      return h === "" || h === "#" || h.startsWith("javascript:void") || h === "javascript:;";
+    }
+    const seen = new Set<string>();
+    const results: string[] = [];
+    const candidates = Array.from(
+      document.querySelectorAll('a[class*="btn" i], a[class*="button" i], a[role="button"]')
+    );
+    for (const el of candidates) {
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 2 || rect.height < 2) continue;
+      const style = window.getComputedStyle(el);
+      if (style.visibility === "hidden" || style.display === "none") continue;
+      if (!isPlaceholderHref(el.getAttribute("href"))) continue;
+      const label = (el.textContent || "").trim().slice(0, 60) || el.getAttribute("aria-label") || "(unlabeled button)";
+      if (seen.has(label)) continue;
+      seen.add(label);
+      results.push(label);
+      if (results.length >= max) break;
+    }
+    return results;
+  }, limit);
+}
+
+// Non-destructive structural check: a <form> with real input fields but no
+// submit control at all can't be submitted by a normal user, regardless of
+// what JS framework handles it. This deliberately does NOT flag a missing
+// `action` attribute (extremely common and correct for JS-driven/SPA
+// forms) or attempt an actual submission (which could send real data).
+async function findBrokenForms(page: Page, limit = 5): Promise<string[]> {
+  return page.evaluate((max) => {
+    const results: string[] = [];
+    const forms = Array.from(document.querySelectorAll("form"));
+    for (const form of forms) {
+      const rect = form.getBoundingClientRect();
+      if (rect.width < 2 || rect.height < 2) continue;
+      const inputs = form.querySelectorAll("input, textarea, select");
+      if (inputs.length === 0) continue; // not a real data-entry form
+      const hasSubmit =
+        form.querySelector('button:not([type="button"]):not([type="reset"])') ||
+        form.querySelector('input[type="submit"], input[type="image"]');
+      if (hasSubmit) continue;
+      const label = form.getAttribute("aria-label") || form.getAttribute("name") || form.getAttribute("id") || "Unnamed form";
+      results.push(label);
+      if (results.length >= max) break;
+    }
+    return results;
+  }, limit);
 }
 
 // Detects the common bot-protection interstitials (Cloudflare, generic
@@ -425,10 +494,12 @@ export async function analyzeWebsite(url: string, viewport: Viewport): Promise<W
 
     const botChallengeDetected = await waitOutBotChallenge(page);
 
-    const [raw, brokenLinks, brokenImages] = await Promise.all([
+    const [raw, brokenLinks, brokenImages, brokenButtons, brokenForms] = await Promise.all([
       extractRawElements(page),
       findBrokenLinks(page),
       findBrokenImages(page),
+      findBrokenButtons(page),
+      findBrokenForms(page),
     ]);
 
     const screenshotDataUrl = await captureCappedScreenshot(page, viewport);
@@ -441,6 +512,8 @@ export async function analyzeWebsite(url: string, viewport: Viewport): Promise<W
       elements: toDesignElements(raw),
       brokenLinks,
       brokenImages,
+      brokenButtons,
+      brokenForms,
       isDemo: false,
       botChallengeDetected,
     };

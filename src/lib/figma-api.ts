@@ -66,6 +66,7 @@ interface FigmaNode {
   style?: FigmaTextStyle;
   fills?: FigmaPaint[];
   strokes?: FigmaPaint[];
+  strokeWeight?: number;
   cornerRadius?: number;
   opacity?: number;
   layoutMode?: "HORIZONTAL" | "VERTICAL" | "NONE";
@@ -220,6 +221,8 @@ function extractElements(root: FigmaNode, frameOrigin: { x: number; y: number })
           backgroundColor: node.type !== "TEXT" ? firstSolidFill(node.fills) : undefined,
           gradientStops: firstGradientStops(node.fills),
           borderRadius: node.cornerRadius,
+          borderColor: firstSolidFill(node.strokes),
+          borderWidth: node.strokeWeight,
           paddingTop: node.paddingTop,
           paddingRight: node.paddingRight,
           paddingBottom: node.paddingBottom,

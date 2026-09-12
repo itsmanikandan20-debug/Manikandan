@@ -146,6 +146,8 @@ export function parseSvgToFigmaExtraction(svgText: string, fileName: string): Fi
       const rawFill = el.getAttribute("fill") || style.fill;
       const gradientStops = resolveGradientStops(rawFill, mounted);
       const solidColor = gradientStops ? undefined : rgbOrNamedColor(rawFill);
+      const strokeWidth = parseFloat(el.getAttribute("stroke-width") || style.strokeWidth || "0") || 0;
+      const strokeColor = strokeWidth > 0 ? rgbOrNamedColor(el.getAttribute("stroke") || style.stroke) : undefined;
 
       counter += 1;
       elements.push({
@@ -165,6 +167,8 @@ export function parseSvgToFigmaExtraction(svgText: string, fileName: string): Fi
         backgroundColor: tag !== "text" ? solidColor : undefined,
         gradientStops,
         borderRadius: tag === "rect" ? parseFloat(el.getAttribute("rx") || "0") || undefined : undefined,
+        borderColor: strokeColor,
+        borderWidth: strokeWidth || undefined,
         section: nearestNamedSection(el, mounted),
       });
     });

@@ -4,16 +4,20 @@ import type { WebsiteExtraction, Viewport } from "./types";
 import { VIEWPORTS } from "./types";
 
 // The "as-implemented" half of the demo. Every field that differs from
-// demo-figma.ts corresponds to exactly one planted issue:
-//  - hero button text + border radius
-//  - missing hero image
-//  - CTA banner color
-//  - feature icon #2 color
-//  - feature card #3 missing description
-//  - footer font family
-//  - footer column spacing (bunched together)
-//  - nav button width
-//  - hero top padding
+// demo-figma.ts corresponds to exactly one planted issue the tool is
+// meant to catch:
+//  - hero button text ("Content")
+//  - missing hero image ("Images")
+//  - CTA banner color, feature icon #2 color ("Colors" / "Icons")
+//  - feature card #3 missing description ("Content")
+//  - extra hero badge text not in the Figma design ("Extra Text")
+//  - broken footer link, non-functional newsletter button, form with no
+//    submit control ("Links" / "Buttons" / "Forms")
+// Some fields (nav button width, hero top padding, footer font family,
+// footer spacing, button border radius) still differ between the two
+// specs but are deliberately left alone — this tool no longer reports
+// spacing/font-size/border-radius nitpicks, so these are just inert
+// leftover variety in the mock data, not planted issues anymore.
 export const demoWebsiteSpec: PageSpec = {
   source: "website",
   canvasWidth: 1440,
@@ -35,6 +39,7 @@ export const demoWebsiteSpec: PageSpec = {
     buttonRadius: 4,
     buttonColor: "#6931CC",
     showImage: false,
+    extraBadge: "New!",
   },
   cards: [
     { title: "Fast Setup", description: "Paste two URLs and get results in under a minute.", iconColor: "#6931CC" },
@@ -67,6 +72,8 @@ export function buildDemoWebsite(viewport?: Viewport): WebsiteExtraction {
     elements: pageSpecToElements(demoWebsiteSpec),
     brokenLinks: ["https://brandly-demo.example.com/careers (404 Not Found)"],
     brokenImages: [],
+    brokenButtons: ["Newsletter Subscribe"],
+    brokenForms: ["Newsletter signup form"],
     isDemo: true,
   };
 }

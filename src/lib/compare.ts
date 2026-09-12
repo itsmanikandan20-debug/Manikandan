@@ -6,9 +6,18 @@ import type {
   Issue,
   IssueCategory,
   Severity,
+  ElementType,
 } from "./types";
-import { normalizeText, round } from "./similarity";
+import { normalizeText } from "./similarity";
 import { makeId } from "./id";
+
+// Scope, deliberately: only differences meaningful enough for a designer to
+// send to a developer. No 1-2px spacing/padding, no tiny font-size or
+// alignment nudges, no border-radius nitpicks, no minor position drift —
+// those checks were removed outright rather than just tuned, because none
+// of them map to any of the 8 result categories this tool now reports
+// against (Content, Extra Text, Colors, Images, Icons, Links, Buttons,
+// Forms). See README for the full rationale.
 
 // Issue numbers (#1, #2, #3…) are assigned once, at the end, by
 // numberIssues() below — never here. Two different designers can hit the
@@ -46,24 +55,49 @@ function byId(elements: DesignElement[]): Map<string, DesignElement> {
   return new Map(elements.map((e) => [e.id, e]));
 }
 
-const px = (n: number | undefined) => (n === undefined ? "—" : `${round(n)}px`);
 const colorLabel = (c: string | undefined) => c ?? "not set";
 
-const NAMED_WEIGHTS: Record<string, number> = { normal: 400, bold: 700, bolder: 700, lighter: 300 };
-function normalizeFontWeight(weight: string | number | undefined): number | undefined {
-  if (weight === undefined) return undefined;
-  if (typeof weight === "number") return weight;
-  const named = NAMED_WEIGHTS[weight.toLowerCase()];
-  if (named !== undefined) return named;
-  const parsed = parseInt(weight, 10);
-  return Number.isFinite(parsed) ? parsed : undefined;
+// --- Color comparison --------------------------------------------------------
+// Colors are extracted from computed CSS / Figma paint data, not sampled
+// from a screenshot, so they're already exact — but small rounding (Figma
+// fill percentages, color-space conversions) can still produce a
+// technically-different hex that no designer would call a real difference.
+// A perceptual-ish Euclidean RGB distance filters that out while still
+// catching genuine color swaps (max possible distance is ~441).
+function hexToRgb(hex: string): [number, number, number] | null {
+  const m = hex.trim().match(/^#?([0-9a-f]{6})$/i);
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+const COLOR_NOISE_THRESHOLD = 28; // ignore differences this small or smaller
+
+function colorsDiffer(a: string, b: string): boolean {
+  const na = normalizeText(a);
+  const nb = normalizeText(b);
+  if (na === nb) return false;
+  const ca = hexToRgb(a);
+  const cb = hexToRgb(b);
+  if (!ca || !cb) return true; // non-hex (named colors etc.) — exact match already ruled out above
+  const [r1, g1, b1] = ca;
+  const [r2, g2, b2] = cb;
+  const dist = Math.sqrt((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2);
+  return dist > COLOR_NOISE_THRESHOLD;
+}
+
+// Which result tab a color/fill difference on this element belongs under.
+function colorCategoryFor(type: ElementType): IssueCategory {
+  if (type === "icon") return "icons";
+  return "colors";
 }
 
 /**
  * Walks every matched Figma/website pair and every unmatched element,
- * producing the full Visual + Content + Layout issue list. UX issues
- * (broken links, overflow, accessibility) are handled separately in
- * `detectUxIssues` because they don't come from a Figma comparison.
+ * producing the Content / Colors / Images / Icons / Extra Text issue list.
+ * Link/Button/Form functional checks are handled separately in
+ * `detectUxIssues` because they come from the live website alone, not a
+ * Figma comparison.
  */
 export function compareDesignToWebsite(
   figma: FigmaExtraction,
@@ -92,17 +126,26 @@ export function compareDesignToWebsite(
     }
   }
 
-  issues.push(...compareContainers(figma.elements, website.elements, page));
+  issues.push(...compareContainerColors(figma.elements, website.elements, page));
 
   return issues;
+}
+
+// Missing/extra element issues are routed by element type: an image or
+// icon gets its own tab even when missing/extra, since "missing image" and
+// "missing icon" are explicitly called out as their own checks — anything
+// else (text, headings, buttons, links) is a content-presence issue.
+function categoryForPresence(type: ElementType, kind: "missing" | "extra"): IssueCategory {
+  if (type === "image") return "images";
+  if (type === "icon") return "icons";
+  return kind === "extra" ? "extra-text" : "content";
 }
 
 function missingElementIssue(f: DesignElement, page: string): Issue {
   const highValue: DesignElement["type"][] = ["button", "image", "heading", "component"];
   const severity: Severity = highValue.includes(f.type) ? "high" : "medium";
-  const category: IssueCategory = f.type === "image" || f.type === "icon" ? "layout" : "content";
   return makeIssue({
-    category,
+    category: categoryForPresence(f.type, "missing"),
     severity,
     title: `Missing ${f.type}: "${f.text || f.name}"`,
     section: f.section,
@@ -120,7 +163,7 @@ function missingElementIssue(f: DesignElement, page: string): Issue {
 
 function extraElementIssue(w: DesignElement, page: string): Issue {
   return makeIssue({
-    category: "layout",
+    category: categoryForPresence(w.type, "extra"),
     severity: "low",
     title: `Extra ${w.type} not in Figma: "${w.text || w.name}"`,
     section: w.section,
@@ -156,13 +199,16 @@ function comparePair(f: DesignElement, w: DesignElement, confidence: number, pag
     const nw = normalizeText(w.text);
     if (nf !== nw && (nf || nw)) {
       const isImportant = f.type === "button" || f.type === "heading";
+      const missingOnWebsite = !nw;
       out.push(
         makeIssue({
           ...base,
           category: "content",
           severity: isImportant ? "high" : "medium",
-          title: `${labelFor(f)} text does not match`,
-          description: `The text on this ${f.type} differs between the Figma design and the live website.`,
+          title: missingOnWebsite ? `Missing text: "${f.text}"` : `${labelFor(f)} text does not match`,
+          description: missingOnWebsite
+            ? `This ${f.type}'s text from the Figma design is missing on the live website.`
+            : `The text on this ${f.type} differs between the Figma design and the live website.`,
           expected: f.text || "(empty)",
           actual: w.text || "(empty)",
           difference: "Text content differs",
@@ -172,68 +218,15 @@ function comparePair(f: DesignElement, w: DesignElement, confidence: number, pag
     }
   }
 
-  // --- Visual: font family -----------------------------------------------------
-  if (f.fontFamily && w.fontFamily && normalizeText(f.fontFamily) !== normalizeText(w.fontFamily)) {
+  // --- Colors: text color -------------------------------------------------------
+  if (f.color && w.color && colorsDiffer(f.color, w.color)) {
     out.push(
       makeIssue({
         ...base,
-        category: "visual",
-        severity: "low",
-        title: `${labelFor(f)} font family mismatch`,
-        description: "The implemented font family does not match the one specified in Figma.",
-        expected: f.fontFamily,
-        actual: w.fontFamily,
-        difference: `"${w.fontFamily}" instead of "${f.fontFamily}"`,
-        correction: `Update the font-family to "${f.fontFamily}".`,
-      })
-    );
-  }
-
-  // --- Visual: font size --------------------------------------------------------
-  if (f.fontSize && w.fontSize && Math.abs(f.fontSize - w.fontSize) >= 2) {
-    out.push(
-      makeIssue({
-        ...base,
-        category: "visual",
-        severity: Math.abs(f.fontSize - w.fontSize) >= 8 ? "medium" : "low",
-        title: `${labelFor(f)} font size mismatch`,
-        description: "The rendered font size does not match the Figma design.",
-        expected: px(f.fontSize),
-        actual: px(w.fontSize),
-        difference: px(Math.abs(f.fontSize - w.fontSize)),
-        correction: `Set font-size to ${px(f.fontSize)}.`,
-      })
-    );
-  }
-
-  // --- Visual: font weight --------------------------------------------------------
-  const fWeight = normalizeFontWeight(f.fontWeight);
-  const wWeight = normalizeFontWeight(w.fontWeight);
-  if (fWeight !== undefined && wWeight !== undefined && Math.abs(fWeight - wWeight) >= 200) {
-    out.push(
-      makeIssue({
-        ...base,
-        category: "visual",
-        severity: Math.abs(fWeight - wWeight) >= 300 ? "medium" : "low",
-        title: `${labelFor(f)} font weight mismatch`,
-        description: "The font weight (boldness) does not match the Figma design.",
-        expected: String(fWeight),
-        actual: String(wWeight),
-        difference: `${fWeight > wWeight ? "lighter" : "heavier"} than expected`,
-        correction: `Set font-weight to ${fWeight}.`,
-      })
-    );
-  }
-
-  // --- Visual: color -------------------------------------------------------------
-  if (f.color && w.color && normalizeText(f.color) !== normalizeText(w.color)) {
-    out.push(
-      makeIssue({
-        ...base,
-        category: "visual",
-        severity: "low",
-        title: `${labelFor(f)} text color mismatch`,
-        description: "Text color differs from the Figma design.",
+        category: colorCategoryFor(f.type),
+        severity: f.type === "button" ? "medium" : "low",
+        title: `${labelFor(f)} text color does not match`,
+        description: "Text color differs meaningfully from the Figma design.",
         expected: colorLabel(f.color),
         actual: colorLabel(w.color),
         difference: "Color does not match",
@@ -242,32 +235,32 @@ function comparePair(f: DesignElement, w: DesignElement, confidence: number, pag
     );
   }
 
-  // --- Visual: background color ---------------------------------------------------
-  if (f.backgroundColor && w.backgroundColor && normalizeText(f.backgroundColor) !== normalizeText(w.backgroundColor)) {
-    const isLarge = f.width * f.height > 200 * 100;
+  // --- Colors: background / fill color -------------------------------------------
+  const isLarge = f.width * f.height > 200 * 100;
+  if (f.backgroundColor && w.backgroundColor && colorsDiffer(f.backgroundColor, w.backgroundColor)) {
+    const isButton = f.type === "button";
     out.push(
       makeIssue({
         ...base,
-        category: "visual",
-        severity: isLarge ? "medium" : "low",
-        title: `${labelFor(f)} background color mismatch`,
-        description: "Background/fill color differs from the Figma design.",
+        category: colorCategoryFor(f.type),
+        severity: isButton || isLarge ? "high" : "medium",
+        title: isButton ? `${labelFor(f)} color does not match` : `${labelFor(f)} background color does not match`,
+        description: `${isButton ? "Button" : "Background"} color differs meaningfully from the Figma design.`,
         expected: colorLabel(f.backgroundColor),
         actual: colorLabel(w.backgroundColor),
         difference: "Color does not match",
-        correction: `Change the background color to ${f.backgroundColor}.`,
+        correction: `Change the ${isButton ? "button" : "background"} color to ${f.backgroundColor}.`,
       })
     );
   }
 
-  // --- Visual: gradient fill --------------------------------------------------------
-  const isLargeEl = f.width * f.height > 200 * 100;
+  // --- Colors: gradient fill --------------------------------------------------------
   if (f.gradientStops && !w.gradientStops) {
     out.push(
       makeIssue({
         ...base,
-        category: "visual",
-        severity: isLargeEl ? "medium" : "low",
+        category: colorCategoryFor(f.type),
+        severity: isLarge ? "medium" : "low",
         title: `${labelFor(f)} should be a gradient`,
         description: "This element uses a gradient fill in the Figma design, but the website shows a flat/solid color instead.",
         expected: `Gradient (${f.gradientStops.join(" → ")})`,
@@ -280,7 +273,7 @@ function comparePair(f: DesignElement, w: DesignElement, confidence: number, pag
     out.push(
       makeIssue({
         ...base,
-        category: "visual",
+        category: colorCategoryFor(f.type),
         severity: "low",
         title: `${labelFor(f)} has an unexpected gradient`,
         description: "The website uses a gradient fill here, but the Figma design specifies a flat/solid color.",
@@ -294,9 +287,9 @@ function comparePair(f: DesignElement, w: DesignElement, confidence: number, pag
     out.push(
       makeIssue({
         ...base,
-        category: "visual",
-        severity: isLargeEl ? "medium" : "low",
-        title: `${labelFor(f)} gradient colors mismatch`,
+        category: colorCategoryFor(f.type),
+        severity: isLarge ? "medium" : "low",
+        title: `${labelFor(f)} gradient colors do not match`,
         description: "The gradient's colors differ from the Figma design.",
         expected: f.gradientStops.join(" → "),
         actual: w.gradientStops.join(" → "),
@@ -306,73 +299,24 @@ function comparePair(f: DesignElement, w: DesignElement, confidence: number, pag
     );
   }
 
-  // --- Visual: border radius --------------------------------------------------------
-  if (f.borderRadius !== undefined && w.borderRadius !== undefined && Math.abs(f.borderRadius - w.borderRadius) >= 2) {
+  // --- Colors: border color -----------------------------------------------------
+  // Only worth comparing when there's an actual visible border on at least
+  // one side — an invisible (0px) border's color is meaningless noise.
+  const hasVisibleBorder = (f.borderWidth ?? 0) > 0 || (w.borderWidth ?? 0) > 0;
+  if (hasVisibleBorder && f.borderColor && w.borderColor && colorsDiffer(f.borderColor, w.borderColor)) {
     out.push(
       makeIssue({
         ...base,
-        category: "visual",
+        category: colorCategoryFor(f.type),
         severity: "low",
-        title: `${labelFor(f)} border radius mismatch`,
-        description: "Corner rounding does not match the Figma design.",
-        expected: px(f.borderRadius),
-        actual: px(w.borderRadius),
-        difference: px(Math.abs(f.borderRadius - w.borderRadius)),
-        correction: `Set border-radius to ${px(f.borderRadius)}.`,
+        title: `${labelFor(f)} border color does not match`,
+        description: "Border color differs meaningfully from the Figma design.",
+        expected: colorLabel(f.borderColor),
+        actual: colorLabel(w.borderColor),
+        difference: "Color does not match",
+        correction: `Change the border color to ${f.borderColor}.`,
       })
     );
-  }
-
-  // Structural groupings (feature cards, footer columns, ...) shouldn't be
-  // flagged for size/position individually — their spacing is already
-  // covered by the container gap/padding check in compareContainers, and
-  // double-reporting the same root cause as two separate issues is noise.
-  const isStructuralGroup = f.type === "component" && !f.text;
-  let sizeIssueFlagged = false;
-
-  if (!isStructuralGroup) {
-    // --- Layout: size -------------------------------------------------------------
-    const widthDiffPct = f.width > 0 ? Math.abs(f.width - w.width) / f.width : 0;
-    const heightDiffPct = f.height > 0 ? Math.abs(f.height - w.height) / f.height : 0;
-    if (widthDiffPct > 0.12 || heightDiffPct > 0.12) {
-      sizeIssueFlagged = true;
-      out.push(
-        makeIssue({
-          ...base,
-          category: "layout",
-          severity: Math.max(widthDiffPct, heightDiffPct) > 0.3 ? "medium" : "low",
-          title: `${labelFor(f)} size does not match design`,
-          description: "This element's rendered dimensions differ noticeably from Figma.",
-          expected: `${round(f.width)} × ${round(f.height)}px`,
-          actual: `${round(w.width)} × ${round(w.height)}px`,
-          difference: `${px(Math.abs(f.width - w.width))} wide, ${px(Math.abs(f.height - w.height))} tall`,
-          correction: `Resize to ${round(f.width)} × ${round(f.height)}px to match the design.`,
-        })
-      );
-    }
-
-    // --- Layout: position ---------------------------------------------------------
-    // Skip if a size mismatch was already reported for this same element —
-    // a resized, edge-anchored element (e.g. a right-aligned button that
-    // got narrower) naturally shifts position as a side effect, and that's
-    // one root cause, not two separate issues.
-    const dx = Math.abs(f.x - w.x);
-    const dy = Math.abs(f.y - w.y);
-    if (!sizeIssueFlagged && (dx > 24 || dy > 24)) {
-      out.push(
-        makeIssue({
-          ...base,
-          category: "layout",
-          severity: Math.max(dx, dy) > 60 ? "medium" : "low",
-          title: `${labelFor(f)} incorrectly positioned`,
-          description: "This element's position on the page has drifted from the Figma layout.",
-          expected: `x: ${round(f.x)}px, y: ${round(f.y)}px`,
-          actual: `x: ${round(w.x)}px, y: ${round(w.y)}px`,
-          difference: `offset by ${px(dx)} horizontally, ${px(dy)} vertically`,
-          correction: "Reposition the element to match the Figma layout coordinates.",
-        })
-      );
-    }
   }
 
   return out;
@@ -382,10 +326,11 @@ function labelFor(el: DesignElement): string {
   return el.name || el.section || el.type;
 }
 
-// Compares container-level spacing (padding / gap) between Figma sections
-// and their matching website sections, by section name — this is what
-// produces issues like "Hero Section Spacing: Expected 64px, Actual 48px".
-function compareContainers(figmaEls: DesignElement[], websiteEls: DesignElement[], page: string): Issue[] {
+// Section-level background color (Figma "Hero Section" vs its website
+// counterpart, matched by name) — the one container-level check kept from
+// the old spacing/padding/gap comparison, since a wrong section background
+// is a real, visible color difference, not a minor layout nudge.
+function compareContainerColors(figmaEls: DesignElement[], websiteEls: DesignElement[], page: string): Issue[] {
   const out: Issue[] = [];
   const figmaContainers = figmaEls.filter((e) => e.type === "section" || e.type === "container");
   const websiteContainers = websiteEls.filter((e) => e.type === "section" || e.type === "container");
@@ -393,66 +338,19 @@ function compareContainers(figmaEls: DesignElement[], websiteEls: DesignElement[
   for (const f of figmaContainers) {
     const w = websiteContainers.find((c) => normalizeText(c.name) === normalizeText(f.name));
     if (!w) continue;
-
-    if (f.backgroundColor && w.backgroundColor && normalizeText(f.backgroundColor) !== normalizeText(w.backgroundColor)) {
+    if (f.backgroundColor && w.backgroundColor && colorsDiffer(f.backgroundColor, w.backgroundColor)) {
       out.push(
         makeIssue({
-          category: "visual",
-          severity: f.width * f.height > 300 * 100 ? "medium" : "low",
-          title: `${f.name} background color mismatch`,
+          category: "colors",
+          severity: f.width * f.height > 300 * 100 ? "high" : "medium",
+          title: `${f.name} background color does not match`,
           section: f.name,
           page,
-          description: "This section's background color differs from the Figma design.",
+          description: "This section's background color differs meaningfully from the Figma design.",
           expected: f.backgroundColor,
           actual: w.backgroundColor,
           difference: "Color does not match",
           correction: `Change the background color to ${f.backgroundColor}.`,
-          matchConfidence: 100,
-          figmaElementId: f.id,
-          websiteElementId: w.id,
-          websiteSelector: w.selector,
-          boundingBox: { x: w.x, y: w.y, width: w.width, height: w.height },
-        })
-      );
-    }
-
-    if (f.paddingTop !== undefined && w.paddingTop !== undefined && Math.abs(f.paddingTop - w.paddingTop) >= 8) {
-      const diff = Math.abs(f.paddingTop - w.paddingTop);
-      out.push(
-        makeIssue({
-          category: "layout",
-          severity: diff / f.paddingTop > 0.2 ? "medium" : "low",
-          title: `${f.name} spacing`,
-          section: f.name,
-          page,
-          description: "Top padding for this section does not match the Figma spec.",
-          expected: px(f.paddingTop),
-          actual: px(w.paddingTop),
-          difference: px(diff),
-          correction: `Set top padding to ${px(f.paddingTop)}.`,
-          matchConfidence: 100,
-          figmaElementId: f.id,
-          websiteElementId: w.id,
-          websiteSelector: w.selector,
-          boundingBox: { x: w.x, y: w.y, width: w.width, height: Math.min(w.height, 120) },
-        })
-      );
-    }
-
-    if (f.gap !== undefined && w.gap !== undefined && Math.abs(f.gap - w.gap) >= 8) {
-      const diff = Math.abs(f.gap - w.gap);
-      out.push(
-        makeIssue({
-          category: "layout",
-          severity: diff > 40 ? "medium" : "low",
-          title: `${f.name} alignment & spacing`,
-          section: f.name,
-          page,
-          description: "The gap between items in this section does not match the auto-layout spacing defined in Figma.",
-          expected: px(f.gap),
-          actual: px(w.gap),
-          difference: px(diff),
-          correction: `Set the gap between items to ${px(f.gap)} and confirm alignment matches the Figma auto-layout.`,
           matchConfidence: 100,
           figmaElementId: f.id,
           websiteElementId: w.id,
@@ -467,9 +365,9 @@ function compareContainers(figmaEls: DesignElement[], websiteEls: DesignElement[
 }
 
 /**
- * UX checks that come purely from the live website (not a Figma
- * comparison): broken links/images, overflow, and simple accessibility
- * heuristics.
+ * Functional checks that come purely from the live website (not a Figma
+ * comparison): broken links, broken/missing images, non-functional
+ * buttons, and forms with no way to submit.
  */
 export function detectUxIssues(website: WebsiteExtraction, page: string): Issue[] {
   const issues: Issue[] = [];
@@ -477,7 +375,7 @@ export function detectUxIssues(website: WebsiteExtraction, page: string): Issue[
   for (const link of website.brokenLinks) {
     issues.push(
       makeIssue({
-        category: "ux",
+        category: "links",
         severity: "high",
         title: "Broken link",
         section: "Page-wide",
@@ -495,9 +393,9 @@ export function detectUxIssues(website: WebsiteExtraction, page: string): Issue[
   for (const img of website.brokenImages) {
     issues.push(
       makeIssue({
-        category: "ux",
+        category: "images",
         severity: "high",
-        title: "Broken image",
+        title: "Missing image",
         section: "Page-wide",
         page,
         description: `An <img> tag failed to load its source: ${img}`,
@@ -510,26 +408,38 @@ export function detectUxIssues(website: WebsiteExtraction, page: string): Issue[
     );
   }
 
-  const overflowing = website.elements.filter(
-    (el) => el.width > website.viewport.width + 4 && el.type !== "frame"
-  );
-  for (const el of overflowing.slice(0, 3)) {
+  for (const btn of website.brokenButtons) {
     issues.push(
       makeIssue({
-        category: "ux",
-        severity: "medium",
-        title: `${labelFor(el)} overflows the viewport`,
-        section: el.section,
+        category: "buttons",
+        severity: "high",
+        title: `Button has no destination: "${btn}"`,
+        section: "Page-wide",
         page,
-        description: "This element is wider than the viewport, which can cause unwanted horizontal scrolling.",
-        expected: `Width ≤ ${website.viewport.width}px`,
-        actual: `${round(el.width)}px wide`,
-        difference: `${round(el.width - website.viewport.width)}px too wide`,
-        correction: "Constrain this element's width or add responsive wrapping.",
+        description: `This button/link has no real destination configured (empty or placeholder href), so clicking it does nothing. Heuristic check — actual clicking wasn't performed to avoid side effects on the live site.`,
+        expected: "A working link or action",
+        actual: "No destination configured",
+        difference: "Button appears non-functional",
+        correction: "Wire this button up to its intended link or action.",
         matchConfidence: null,
-        websiteElementId: el.id,
-        websiteSelector: el.selector,
-        boundingBox: { x: el.x, y: el.y, width: el.width, height: el.height },
+      })
+    );
+  }
+
+  for (const form of website.brokenForms) {
+    issues.push(
+      makeIssue({
+        category: "forms",
+        severity: "high",
+        title: `Form may not submit: ${form}`,
+        section: "Page-wide",
+        page,
+        description: "This form has input fields but no visible submit button, so users may not be able to submit it. Heuristic structural check — actual submission wasn't tested to avoid sending real data.",
+        expected: "A submit button or control",
+        actual: "No submit control found",
+        difference: "Form has no way to submit",
+        correction: "Add a submit button, or verify the submission is triggered another way.",
+        matchConfidence: null,
       })
     );
   }

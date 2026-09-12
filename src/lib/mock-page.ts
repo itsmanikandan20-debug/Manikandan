@@ -28,6 +28,9 @@ export interface PageSpec {
     buttonRadius: number;
     buttonColor: string;
     showImage: boolean;
+    // Present only on the website spec in the demo data — an unplanned
+    // bit of copy with no Figma counterpart, to demonstrate "Extra Text".
+    extraBadge?: string;
   };
   cards: {
     title: string;
@@ -124,6 +127,11 @@ export function renderPageSvg(spec: PageSpec): string {
     .map((link, i) => `<text x="${420 + i * 90}" y="46" font-size="14" fill="${bodyText}" font-family="${spec.fontFamily}">${esc(link)}</text>`)
     .join("");
 
+  const heroBadgeSvg = spec.hero.extraBadge
+    ? `<rect x="${L.heroHeading.x}" y="${L.heroHeading.y - 34}" width="180" height="28" rx="14" fill="#FDEEDB"/>
+       <text x="${L.heroHeading.x + 16}" y="${L.heroHeading.y - 15}" font-size="12.5" font-weight="600" fill="#B5680A" font-family="${spec.fontFamily}">${esc(spec.hero.extraBadge)}</text>`
+    : "";
+
   const heroHeadingLines = wrapText(spec.hero.heading, 22);
   const heroHeadingSvg = heroHeadingLines
     .map((line, i) => `<text x="${L.heroHeading.x}" y="${L.heroHeading.y + 44 + i * 54}" font-size="42" font-weight="700" fill="${bodyText}" font-family="${spec.fontFamily}">${esc(line)}</text>`)
@@ -182,6 +190,7 @@ export function renderPageSvg(spec: PageSpec): string {
 
     <!-- hero -->
     <rect x="${L.hero.x}" y="${L.hero.y}" width="${L.hero.w}" height="${L.hero.h}" fill="#FAF9FC"/>
+    ${heroBadgeSvg}
     ${heroHeadingSvg}
     ${heroParaSvg}
     <rect x="${L.heroButton.x}" y="${L.heroButton.y}" width="${L.heroButton.w}" height="${L.heroButton.h}" rx="${spec.hero.buttonRadius}" fill="${spec.hero.buttonColor}"/>
@@ -262,6 +271,15 @@ export function pageSpecToElements(spec: PageSpec): DesignElement[] {
   });
 
   push("section", "Hero Section", "Hero", L.hero, { paddingTop: spec.hero.paddingTop });
+  if (spec.hero.extraBadge) {
+    push(
+      "text",
+      "Hero Badge",
+      "Hero",
+      { x: L.heroHeading.x, y: L.heroHeading.y - 34, w: 180, h: 28 },
+      { text: spec.hero.extraBadge, fontFamily: spec.fontFamily, fontSize: 12.5, fontWeight: 600, color: "#B5680A" }
+    );
+  }
   push("heading", "Hero Heading", "Hero", L.heroHeading, {
     text: spec.hero.heading,
     fontFamily: spec.fontFamily,

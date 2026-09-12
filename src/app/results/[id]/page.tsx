@@ -12,8 +12,30 @@ import { ScreenshotCompare } from "@/components/ScreenshotCompare";
 import { IssueCard } from "@/components/IssueCard";
 import { IssueDetailPanel } from "@/components/IssueDetailPanel";
 import { ResponsiveFindings } from "@/components/ResponsiveFindings";
+import { CATEGORY_LABEL } from "@/components/Badges";
 
-const CATEGORY_TABS: (IssueCategory | "all")[] = ["all", "visual", "content", "layout", "ux"];
+const CATEGORY_TABS: (IssueCategory | "all")[] = [
+  "all",
+  "content",
+  "extra-text",
+  "colors",
+  "images",
+  "icons",
+  "links",
+  "buttons",
+  "forms",
+];
+
+const CATEGORY_SCORE_ROWS: { label: string; key: keyof AnalysisResult["categoryScores"] }[] = [
+  { label: "Content", key: "content" },
+  { label: "Extra Text", key: "extraText" },
+  { label: "Colors", key: "colors" },
+  { label: "Images", key: "images" },
+  { label: "Icons", key: "icons" },
+  { label: "Links", key: "links" },
+  { label: "Buttons", key: "buttons" },
+  { label: "Forms", key: "forms" },
+];
 
 export default function ResultsPage() {
   const params = useParams<{ id: string }>();
@@ -129,11 +151,10 @@ export default function ResultsPage() {
             </p>
           </div>
         </div>
-        <div className="grid gap-5 rounded-2xl border border-border bg-white p-6 shadow-panel sm:grid-cols-2">
-          <CategoryBar label="Visual" score={analysis.categoryScores.visual} />
-          <CategoryBar label="Content" score={analysis.categoryScores.content} />
-          <CategoryBar label="Layout" score={analysis.categoryScores.layout} />
-          <CategoryBar label="UX" score={analysis.categoryScores.ux} />
+        <div className="grid gap-5 rounded-2xl border border-border bg-white p-6 shadow-panel sm:grid-cols-2 lg:grid-cols-4">
+          {CATEGORY_SCORE_ROWS.map((row) => (
+            <CategoryBar key={row.key} label={row.label} score={analysis.categoryScores[row.key]} />
+          ))}
         </div>
       </div>
 
@@ -202,11 +223,11 @@ export default function ResultsPage() {
                 <button
                   key={c}
                   onClick={() => setCategoryFilter(c)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold capitalize transition ${
+                  className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
                     categoryFilter === c ? "bg-violet-600 text-white" : "bg-surface-sunken text-ink-soft hover:bg-violet-50"
                   }`}
                 >
-                  {c}
+                  {c === "all" ? "All" : CATEGORY_LABEL[c]}
                 </button>
               ))}
             </div>

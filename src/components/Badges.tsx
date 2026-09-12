@@ -34,11 +34,15 @@ export function StatusBadge({ status }: { status: IssueStatus }) {
   );
 }
 
-const CATEGORY_LABEL: Record<IssueCategory, string> = {
-  visual: "Visual",
+export const CATEGORY_LABEL: Record<IssueCategory, string> = {
   content: "Content",
-  layout: "Layout",
-  ux: "UX",
+  "extra-text": "Extra Text",
+  colors: "Colors",
+  images: "Images",
+  icons: "Icons",
+  links: "Links",
+  buttons: "Buttons",
+  forms: "Forms",
 };
 
 export function CategoryBadge({ category }: { category: IssueCategory }) {

@@ -18,15 +18,18 @@ function scoreForCategory(issues: Issue[], category: IssueCategory): number {
 
 export function computeScores(issues: Issue[]): { overallScore: number; categoryScores: CategoryScores } {
   const categoryScores: CategoryScores = {
-    visual: scoreForCategory(issues, "visual"),
     content: scoreForCategory(issues, "content"),
-    layout: scoreForCategory(issues, "layout"),
-    ux: scoreForCategory(issues, "ux"),
+    extraText: scoreForCategory(issues, "extra-text"),
+    colors: scoreForCategory(issues, "colors"),
+    images: scoreForCategory(issues, "images"),
+    icons: scoreForCategory(issues, "icons"),
+    links: scoreForCategory(issues, "links"),
+    buttons: scoreForCategory(issues, "buttons"),
+    forms: scoreForCategory(issues, "forms"),
   };
 
-  const overallScore = round(
-    (categoryScores.visual + categoryScores.content + categoryScores.layout + categoryScores.ux) / 4
-  );
+  const values = Object.values(categoryScores);
+  const overallScore = round(values.reduce((sum, v) => sum + v, 0) / values.length);
 
   return { overallScore, categoryScores };
 }

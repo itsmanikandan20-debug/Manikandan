@@ -51,6 +51,10 @@ export interface DesignElement {
   // than a solid color — an ordered list of the gradient's stop colors.
   gradientStops?: string[];
   borderRadius?: number;
+  // Only meaningful when borderWidth > 0 — an invisible (0px) border's
+  // color is never worth comparing.
+  borderColor?: string;
+  borderWidth?: number;
   paddingTop?: number;
   paddingRight?: number;
   paddingBottom?: number;
@@ -86,6 +90,14 @@ export interface WebsiteExtraction {
   elements: DesignElement[];
   brokenLinks: string[];
   brokenImages: string[];
+  // Heuristic, non-destructive checks — no button was clicked and no form
+  // was submitted. A "broken" button here means it has no real destination
+  // configured (empty/placeholder href); a "broken" form means it has no
+  // submit control at all. Real click/submit testing isn't performed since
+  // that could trigger actual side effects (navigation, real form
+  // submissions) on a live production site.
+  brokenButtons: string[];
+  brokenForms: string[];
   isDemo: boolean;
   // True if the page looked like a bot-detection interstitial (Cloudflare,
   // reCAPTCHA, etc.) even after waiting for it to clear — meaning the
@@ -94,7 +106,12 @@ export interface WebsiteExtraction {
   botChallengeDetected?: boolean;
 }
 
-export type IssueCategory = "visual" | "content" | "layout" | "ux";
+// Scoped to meaningful, developer-actionable differences only — no
+// spacing/padding/font-size/alignment/border-radius nitpicks. "extra-text"
+// is split out from "content" so unplanned copy on the live site (not
+// missing/wrong copy) gets its own tab. "links"/"buttons"/"forms" are
+// functional website checks, not Figma comparisons.
+export type IssueCategory = "content" | "extra-text" | "colors" | "images" | "icons" | "links" | "buttons" | "forms";
 export type Severity = "high" | "medium" | "low";
 export type IssueStatus = "open" | "approved" | "rejected" | "fixed";
 
@@ -128,10 +145,14 @@ export interface Issue {
 }
 
 export interface CategoryScores {
-  visual: number;
   content: number;
-  layout: number;
-  ux: number;
+  extraText: number;
+  colors: number;
+  images: number;
+  icons: number;
+  links: number;
+  buttons: number;
+  forms: number;
 }
 
 export interface ResponsiveFinding {

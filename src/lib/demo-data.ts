@@ -4,7 +4,7 @@ import { buildDemoFigma } from "./demo-figma";
 import { buildDemoWebsite } from "./demo-website";
 import { buildDemoResponsive } from "./demo-responsive";
 import { matchElements } from "./matcher";
-import { compareDesignToWebsite, detectUxIssues, createIssue, numberIssues } from "./compare";
+import { compareDesignToWebsite, detectUxIssues, numberIssues } from "./compare";
 import { computeScores } from "./scoring";
 import { makeId } from "./id";
 
@@ -25,30 +25,6 @@ export function buildDemoAnalysis(): AnalysisResult {
     ...compareDesignToWebsite(figma, website, matches, page),
     ...detectUxIssues(website, page),
   ];
-
-  // One hand-authored accessibility issue — not every UX check can be
-  // derived from a Figma diff (this one comes from reading the rendered
-  // CSS, which the real Playwright analyzer does; here we illustrate it).
-  const footerColumn = website.elements.find((e) => e.name === "Footer Column: Company");
-  issues.push(
-    createIssue({
-      category: "ux",
-      severity: "low",
-      title: "Footer links have no visible focus state",
-      section: "Footer",
-      page,
-      description:
-        "Keyboard users tabbing through the footer links get no visible outline or style change, making it hard to tell which link is focused.",
-      expected: "A visible focus ring or underline on :focus-visible",
-      actual: "No style change on focus",
-      difference: "Missing focus indicator",
-      correction: "Add a visible :focus-visible outline or underline to footer links.",
-      matchConfidence: null,
-      websiteElementId: footerColumn?.id,
-      websiteSelector: footerColumn?.selector,
-      boundingBox: footerColumn ? { x: footerColumn.x, y: footerColumn.y, width: footerColumn.width, height: footerColumn.height } : undefined,
-    })
-  );
 
   const numberedIssues = numberIssues(issues);
   const { overallScore, categoryScores } = computeScores(numberedIssues);
