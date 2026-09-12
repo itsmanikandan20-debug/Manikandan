@@ -293,6 +293,34 @@ async function waitOutBotChallenge(page: Page): Promise<boolean> {
   return stillBlocked;
 }
 
+// Makes the automated browser look like an ordinary desktop Chrome visit
+// rather than an obviously-scripted one. This helps against common,
+// lighter-weight bot checks (a lot of real sites use these) — it is NOT
+// an attempt to defeat dedicated enterprise bot-management (Cloudflare
+// Enterprise, etc.), which often fingerprints at the network/TLS level
+// before any of this would even matter, and which this project has no
+// business trying to bypass on someone else's website.
+const REALISTIC_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+async function newStealthContext(browser: Browser, viewport: Viewport) {
+  const context = await browser.newContext({
+    viewport: { width: viewport.width, height: viewport.height },
+    userAgent: REALISTIC_USER_AGENT,
+    locale: "en-US",
+    timezoneId: "America/New_York",
+    extraHTTPHeaders: { "Accept-Language": "en-US,en;q=0.9" },
+  });
+  // The single most common automated-browser tell: navigator.webdriver is
+  // true by default in Playwright/Puppeteer. Real Chrome always reports
+  // false/undefined. Patching it before any page script runs is a
+  // standard, widely-used practice for legitimate test automation.
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+  });
+  return context;
+}
+
 async function findBrokenImages(page: Page): Promise<string[]> {
   return page.evaluate(() => {
     return Array.from(document.querySelectorAll("img"))
@@ -315,7 +343,7 @@ export async function analyzeWebsite(url: string, viewport: Viewport): Promise<W
   }
 
   try {
-    const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
+    const context = await newStealthContext(browser, viewport);
     const page = await context.newPage();
 
     let response;
@@ -372,7 +400,7 @@ export async function captureResponsiveSnapshot(
 
   const browser = await launchBrowser();
   try {
-    const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
+    const context = await newStealthContext(browser, viewport);
     const page = await context.newPage();
     await page.goto(normalizedUrl, { waitUntil: "networkidle", timeout: 25000 }).catch(() =>
       page.goto(normalizedUrl, { waitUntil: "domcontentloaded", timeout: 25000 })
