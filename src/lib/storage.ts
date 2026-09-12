@@ -52,7 +52,7 @@ function stripImages(result: AnalysisResult): AnalysisResult {
     responsive: result.responsive.map((r) => ({ ...r, screenshotDataUrl: undefined })),
     warnings: [
       ...result.warnings,
-      "Screenshots couldn't be saved — your browser's storage for this site is nearly full. Every score, issue, and detail below is still accurate; only the side-by-side images are missing. Clearing old analyses (History → delete) frees up room for screenshots on your next run.",
+      "Screenshots couldn't be saved — your browser's storage for this site is nearly full (the app automatically freed space by removing some older analyses; you can also do this yourself anytime from History). Every score, issue, and detail below is still fully accurate; only the side-by-side images are missing.",
     ],
   };
 }
@@ -74,23 +74,75 @@ function writeHistoryEntry(result: AnalysisResult) {
 
 export type SaveOutcome = "full" | "without-images" | "failed";
 
+// If freeing up this one entry's images still doesn't fit, the browser's
+// storage for this site is full from *previous* saved analyses piling up
+// (every Demo run and real analysis gets saved) — not just this one being
+// large. Rather than keep telling the designer to go clear things
+// manually, evict the oldest saved analyses automatically, oldest first,
+// until the new one fits or there's nothing left to evict.
+function evictOldestUntilFits(newEntryJson: string, key: string): boolean {
+  const history = loadHistory();
+  // Oldest last, since loadHistory()/writeHistoryEntry() keep newest-first.
+  for (let i = history.length - 1; i >= 0; i--) {
+    const victim = history[i];
+    if (victim.id === key.replace(RESULT_PREFIX, "")) continue; // never evict the one we're saving
+    localStorage.removeItem(RESULT_PREFIX + victim.id);
+    history.splice(i, 1);
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+      localStorage.setItem(key, newEntryJson);
+      return true;
+    } catch (err) {
+      if (!isQuotaExceeded(err)) return false;
+      // still doesn't fit — keep evicting
+    }
+  }
+  return false;
+}
+
 export function saveAnalysis(result: AnalysisResult): SaveOutcome {
+  const key = RESULT_PREFIX + result.id;
+
   try {
-    localStorage.setItem(RESULT_PREFIX + result.id, JSON.stringify(result));
+    localStorage.setItem(key, JSON.stringify(result));
     writeHistoryEntry(result);
     return "full";
   } catch (err) {
     if (!isQuotaExceeded(err)) return "failed";
   }
 
-  // Retry once, without the large embedded images.
+  // Retry without this entry's own large embedded images.
+  const strippedJson = JSON.stringify(stripImages(result));
   try {
-    localStorage.setItem(RESULT_PREFIX + result.id, JSON.stringify(stripImages(result)));
+    localStorage.setItem(key, strippedJson);
     writeHistoryEntry(result);
     return "without-images";
-  } catch {
-    return "failed";
+  } catch (err) {
+    if (!isQuotaExceeded(err)) return "failed";
   }
+
+  // Still doesn't fit — the accumulated history itself is the problem.
+  // Free space by evicting old analyses, then try the stripped version
+  // one more time.
+  if (evictOldestUntilFits(strippedJson, key)) {
+    writeHistoryEntry(result);
+    return "without-images";
+  }
+
+  return "failed";
+}
+
+// Wipes every saved analysis and history entry in this browser — the
+// blunt, one-click way to recover storage space, offered on the History
+// page next to deleting entries one at a time.
+export function clearAllAnalyses() {
+  safe(() => {
+    for (const entry of loadHistory()) {
+      localStorage.removeItem(RESULT_PREFIX + entry.id);
+    }
+    localStorage.removeItem(HISTORY_KEY);
+    return null;
+  }, null);
 }
 
 export function loadAnalysis(id: string): AnalysisResult | null {
