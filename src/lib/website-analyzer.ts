@@ -65,6 +65,7 @@ interface RawElement {
   fontWeight: string;
   color: string;
   backgroundColor: string;
+  gradientStops: string[] | null;
   borderRadius: number;
   paddingTop: number;
   paddingRight: number;
@@ -168,6 +169,7 @@ const EXTRACT_SCRIPT = `(() => {
       fontWeight: style.fontWeight,
       color: rgbToHex(style.color),
       backgroundColor: rgbToHex(style.backgroundColor),
+      gradientStops: extractGradientStops(style.backgroundImage),
       borderRadius: parseFloat(style.borderRadius) || 0,
       paddingTop: parseFloat(style.paddingTop) || 0,
       paddingRight: parseFloat(style.paddingRight) || 0,
@@ -182,6 +184,14 @@ const EXTRACT_SCRIPT = `(() => {
       isContainer,
       autoLayout: style.display === 'flex' ? (style.flexDirection && style.flexDirection.startsWith('row') ? 'horizontal' : 'vertical') : 'none',
     });
+  }
+
+  function extractGradientStops(backgroundImage) {
+    if (!backgroundImage || backgroundImage.indexOf('gradient') === -1) return null;
+    var matches = backgroundImage.match(/rgba?\\([^)]+\\)/g);
+    if (!matches) return null;
+    var stops = matches.map(rgbToHex).filter(function (c) { return c; });
+    return stops.length > 0 ? stops : null;
   }
 
   function rgbToHex(rgb) {
@@ -217,6 +227,7 @@ function toDesignElements(raw: RawElement[]): DesignElement[] {
     fontWeight: r.fontWeight || undefined,
     color: r.color ?? undefined,
     backgroundColor: r.backgroundColor ?? undefined,
+    gradientStops: r.gradientStops ?? undefined,
     borderRadius: r.borderRadius,
     paddingTop: r.paddingTop,
     paddingRight: r.paddingRight,

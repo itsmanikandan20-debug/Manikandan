@@ -47,6 +47,9 @@ export interface DesignElement {
   fontWeight?: number | string;
   color?: string;
   backgroundColor?: string;
+  // Present instead of backgroundColor when the fill is a gradient rather
+  // than a solid color — an ordered list of the gradient's stop colors.
+  gradientStops?: string[];
   borderRadius?: number;
   paddingTop?: number;
   paddingRight?: number;

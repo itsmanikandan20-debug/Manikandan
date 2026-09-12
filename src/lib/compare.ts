@@ -49,6 +49,16 @@ function byId(elements: DesignElement[]): Map<string, DesignElement> {
 const px = (n: number | undefined) => (n === undefined ? "—" : `${round(n)}px`);
 const colorLabel = (c: string | undefined) => c ?? "not set";
 
+const NAMED_WEIGHTS: Record<string, number> = { normal: 400, bold: 700, bolder: 700, lighter: 300 };
+function normalizeFontWeight(weight: string | number | undefined): number | undefined {
+  if (weight === undefined) return undefined;
+  if (typeof weight === "number") return weight;
+  const named = NAMED_WEIGHTS[weight.toLowerCase()];
+  if (named !== undefined) return named;
+  const parsed = parseInt(weight, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 /**
  * Walks every matched Figma/website pair and every unmatched element,
  * producing the full Visual + Content + Layout issue list. UX issues
@@ -196,6 +206,25 @@ function comparePair(f: DesignElement, w: DesignElement, confidence: number, pag
     );
   }
 
+  // --- Visual: font weight --------------------------------------------------------
+  const fWeight = normalizeFontWeight(f.fontWeight);
+  const wWeight = normalizeFontWeight(w.fontWeight);
+  if (fWeight !== undefined && wWeight !== undefined && Math.abs(fWeight - wWeight) >= 200) {
+    out.push(
+      makeIssue({
+        ...base,
+        category: "visual",
+        severity: Math.abs(fWeight - wWeight) >= 300 ? "medium" : "low",
+        title: `${labelFor(f)} font weight mismatch`,
+        description: "The font weight (boldness) does not match the Figma design.",
+        expected: String(fWeight),
+        actual: String(wWeight),
+        difference: `${fWeight > wWeight ? "lighter" : "heavier"} than expected`,
+        correction: `Set font-weight to ${fWeight}.`,
+      })
+    );
+  }
+
   // --- Visual: color -------------------------------------------------------------
   if (f.color && w.color && normalizeText(f.color) !== normalizeText(w.color)) {
     out.push(
@@ -227,6 +256,52 @@ function comparePair(f: DesignElement, w: DesignElement, confidence: number, pag
         actual: colorLabel(w.backgroundColor),
         difference: "Color does not match",
         correction: `Change the background color to ${f.backgroundColor}.`,
+      })
+    );
+  }
+
+  // --- Visual: gradient fill --------------------------------------------------------
+  const isLargeEl = f.width * f.height > 200 * 100;
+  if (f.gradientStops && !w.gradientStops) {
+    out.push(
+      makeIssue({
+        ...base,
+        category: "visual",
+        severity: isLargeEl ? "medium" : "low",
+        title: `${labelFor(f)} should be a gradient`,
+        description: "This element uses a gradient fill in the Figma design, but the website shows a flat/solid color instead.",
+        expected: `Gradient (${f.gradientStops.join(" → ")})`,
+        actual: colorLabel(w.backgroundColor ?? w.color),
+        difference: "Gradient fill missing",
+        correction: `Apply a gradient using: ${f.gradientStops.join(", ")}.`,
+      })
+    );
+  } else if (!f.gradientStops && w.gradientStops) {
+    out.push(
+      makeIssue({
+        ...base,
+        category: "visual",
+        severity: "low",
+        title: `${labelFor(f)} has an unexpected gradient`,
+        description: "The website uses a gradient fill here, but the Figma design specifies a flat/solid color.",
+        expected: colorLabel(f.backgroundColor ?? f.color),
+        actual: `Gradient (${w.gradientStops.join(" → ")})`,
+        difference: "Unexpected gradient fill",
+        correction: `Replace the gradient with a solid color: ${f.backgroundColor ?? f.color ?? "as specified in Figma"}.`,
+      })
+    );
+  } else if (f.gradientStops && w.gradientStops && f.gradientStops.join("|") !== w.gradientStops.join("|")) {
+    out.push(
+      makeIssue({
+        ...base,
+        category: "visual",
+        severity: isLargeEl ? "medium" : "low",
+        title: `${labelFor(f)} gradient colors mismatch`,
+        description: "The gradient's colors differ from the Figma design.",
+        expected: f.gradientStops.join(" → "),
+        actual: w.gradientStops.join(" → "),
+        difference: "Gradient colors do not match",
+        correction: `Update the gradient to use: ${f.gradientStops.join(", ")}.`,
       })
     );
   }

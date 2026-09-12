@@ -34,11 +34,16 @@ interface FigmaColor {
   b: number;
   a: number;
 }
+interface FigmaGradientStop {
+  color: FigmaColor;
+  position: number;
+}
 interface FigmaPaint {
   type: string;
   color?: FigmaColor;
   visible?: boolean;
   opacity?: number;
+  gradientStops?: FigmaGradientStop[];
 }
 interface FigmaRect {
   x: number;
@@ -139,6 +144,13 @@ function firstSolidFill(paints: FigmaPaint[] | undefined): string | undefined {
   return solid ? colorToHex(solid.color) : undefined;
 }
 
+function firstGradientStops(paints: FigmaPaint[] | undefined): string[] | undefined {
+  const gradient = (paints ?? []).find((p) => p.type.startsWith("GRADIENT_") && p.visible !== false);
+  if (!gradient?.gradientStops?.length) return undefined;
+  const stops = gradient.gradientStops.map((s) => colorToHex(s.color)).filter((c): c is string => Boolean(c));
+  return stops.length > 0 ? stops : undefined;
+}
+
 function classifyType(node: FigmaNode): ElementType {
   const name = node.name.toLowerCase();
   if (node.type === "TEXT") {
@@ -206,6 +218,7 @@ function extractElements(root: FigmaNode, frameOrigin: { x: number; y: number })
           fontWeight: node.style?.fontWeight,
           color: node.type === "TEXT" ? firstSolidFill(node.fills) : undefined,
           backgroundColor: node.type !== "TEXT" ? firstSolidFill(node.fills) : undefined,
+          gradientStops: firstGradientStops(node.fills),
           borderRadius: node.cornerRadius,
           paddingTop: node.paddingTop,
           paddingRight: node.paddingRight,

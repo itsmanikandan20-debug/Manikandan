@@ -62,6 +62,35 @@ function rgbOrNamedColor(value: string | null): string | undefined {
   return value;
 }
 
+// Figma's SVG export references gradient fills as fill="url(#id)", with
+// the actual color stops sometimes on a second <linearGradient>/
+// <radialGradient> the first one points to via href (a common way to
+// share one set of stops across multiple shapes) — so one level of href
+// indirection is resolved here too.
+function resolveGradientStops(fillValue: string | null, root: Element): string[] | undefined {
+  if (!fillValue) return undefined;
+  const match = fillValue.match(/url\(#([^)]+)\)/);
+  if (!match) return undefined;
+
+  let gradEl: Element | null = root.querySelector(`#${CSS.escape(match[1])}`);
+  if (!gradEl) return undefined;
+
+  const href = gradEl.getAttribute("href") || gradEl.getAttribute("xlink:href");
+  if (href) {
+    const linked = root.querySelector(`#${CSS.escape(href.replace(/^#/, ""))}`);
+    if (linked) gradEl = linked;
+  }
+
+  const stops = Array.from(gradEl.querySelectorAll("stop"))
+    .map((s) => {
+      const styleMatch = (s.getAttribute("style") || "").match(/stop-color:\s*([^;]+)/);
+      return s.getAttribute("stop-color") || styleMatch?.[1]?.trim();
+    })
+    .filter((c): c is string => Boolean(c));
+
+  return stops.length > 0 ? stops : undefined;
+}
+
 export function parseSvgToFigmaExtraction(svgText: string, fileName: string): FigmaExtraction {
   const parser = new DOMParser();
   const doc = parser.parseFromString(svgText, "image/svg+xml");
@@ -114,6 +143,10 @@ export function parseSvgToFigmaExtraction(svgText: string, fileName: string): Fi
       const name = sanitizeName(id, tag);
       const type: ElementType = isLikelyBackground ? "section" : classify(tag, name, fontSize, text?.length ?? 0);
 
+      const rawFill = el.getAttribute("fill") || style.fill;
+      const gradientStops = resolveGradientStops(rawFill, mounted);
+      const solidColor = gradientStops ? undefined : rgbOrNamedColor(rawFill);
+
       counter += 1;
       elements.push({
         id: `svg_${counter}`,
@@ -128,8 +161,9 @@ export function parseSvgToFigmaExtraction(svgText: string, fileName: string): Fi
         fontFamily: tag === "text" ? style.fontFamily.split(",")[0]?.replace(/["']/g, "").trim() || undefined : undefined,
         fontSize,
         fontWeight: tag === "text" ? style.fontWeight : undefined,
-        color: tag === "text" ? rgbOrNamedColor(el.getAttribute("fill") || style.fill) : undefined,
-        backgroundColor: tag !== "text" ? rgbOrNamedColor(el.getAttribute("fill") || style.fill) : undefined,
+        color: tag === "text" ? solidColor : undefined,
+        backgroundColor: tag !== "text" ? solidColor : undefined,
+        gradientStops,
         borderRadius: tag === "rect" ? parseFloat(el.getAttribute("rx") || "0") || undefined : undefined,
         section: nearestNamedSection(el, mounted),
       });
