@@ -50,6 +50,10 @@ function stripImages(result: AnalysisResult): AnalysisResult {
     figma: { ...result.figma, thumbnailUrl: undefined },
     website: { ...result.website, screenshotDataUrl: undefined },
     responsive: result.responsive.map((r) => ({ ...r, screenshotDataUrl: undefined })),
+    warnings: [
+      ...result.warnings,
+      "Screenshots couldn't be saved — your browser's storage for this site is nearly full. Every score, issue, and detail below is still accurate; only the side-by-side images are missing. Clearing old analyses (History → delete) frees up room for screenshots on your next run.",
+    ],
   };
 }
 
