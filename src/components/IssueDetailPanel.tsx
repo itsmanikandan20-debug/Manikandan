@@ -81,6 +81,8 @@ export function IssueDetailPanel({
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">Visual comparison</p>
             <ScreenshotCompare
               figmaSrc={analysis.figma.thumbnailUrl}
+              figmaWidth={analysis.figma.frameWidth}
+              figmaHeight={analysis.figma.frameHeight}
               websiteSrc={analysis.website.screenshotDataUrl}
               issues={[issue]}
               activeIssueId={issue.id}

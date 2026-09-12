@@ -21,10 +21,21 @@ interface ImagePanelProps {
   activeIssueId?: string | null;
   onSelectIssue?: (id: string) => void;
   opacity?: number;
+  // The coordinate space every issue's boundingBox was measured in. For
+  // Figma, this MUST come from the extraction's own frameWidth/frameHeight
+  // rather than the rendered <img>'s naturalWidth/naturalHeight — an
+  // uploaded SVG's width/height attributes frequently don't match its
+  // viewBox (a common Figma export quirk, e.g. a 2x-scale export), and
+  // getBBox()-derived element coordinates are always in viewBox units.
+  // Using the wrong denominator scaled every box to the wrong position,
+  // which on a design with many issues looked like total visual chaos.
+  knownWidth?: number;
+  knownHeight?: number;
 }
 
-function ImagePanel({ src, label, issues, space, activeIssueId, onSelectIssue, opacity }: ImagePanelProps) {
-  const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
+function ImagePanel({ src, label, issues, space, activeIssueId, onSelectIssue, opacity, knownWidth, knownHeight }: ImagePanelProps) {
+  const [loadedSize, setLoadedSize] = useState<{ w: number; h: number } | null>(null);
+  const natural = knownWidth && knownHeight ? { w: knownWidth, h: knownHeight } : loadedSize;
   const relevant = issues.filter((i) => issueSpace(i) === space && i.boundingBox);
 
   if (!src) {
@@ -42,7 +53,10 @@ function ImagePanel({ src, label, issues, space, activeIssueId, onSelectIssue, o
         src={src}
         alt={label}
         className="block w-full"
-        onLoad={(e) => setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
+        onLoad={(e) => {
+          if (knownWidth && knownHeight) return; // known coordinate space already set — don't let the image's own rendered size override it
+          setLoadedSize({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight });
+        }}
       />
       {natural &&
         relevant.map((issue) => {
@@ -77,12 +91,16 @@ type Mode = "side-by-side" | "overlay" | "diff";
 
 export function ScreenshotCompare({
   figmaSrc,
+  figmaWidth,
+  figmaHeight,
   websiteSrc,
   issues,
   activeIssueId,
   onSelectIssue,
 }: {
   figmaSrc?: string;
+  figmaWidth?: number;
+  figmaHeight?: number;
   websiteSrc?: string;
   issues: Issue[];
   activeIssueId?: string | null;
@@ -133,7 +151,16 @@ export function ScreenshotCompare({
           <div className="grid gap-4 md:grid-cols-2">
             <div>
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">Figma design</p>
-              <ImagePanel src={figmaSrc} label="Figma" issues={issues} space="figma" activeIssueId={activeIssueId} onSelectIssue={onSelectIssue} />
+              <ImagePanel
+                src={figmaSrc}
+                label="Figma"
+                issues={issues}
+                space="figma"
+                activeIssueId={activeIssueId}
+                onSelectIssue={onSelectIssue}
+                knownWidth={figmaWidth}
+                knownHeight={figmaHeight}
+              />
             </div>
             <div>
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">Live website</p>
@@ -148,7 +175,7 @@ export function ScreenshotCompare({
               The website screenshot is layered on top of the Figma design at {overlayOpacity}% opacity — misaligned edges reveal spacing/position drift.
             </p>
             <div className="relative">
-              <ImagePanel src={figmaSrc} label="Figma" issues={[]} space="figma" />
+              <ImagePanel src={figmaSrc} label="Figma" issues={[]} space="figma" knownWidth={figmaWidth} knownHeight={figmaHeight} />
               <div className="absolute inset-0">
                 <ImagePanel src={websiteSrc} label="Website" issues={[]} space="website" opacity={overlayOpacity / 100} />
               </div>

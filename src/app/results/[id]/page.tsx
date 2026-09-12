@@ -180,6 +180,8 @@ export default function ResultsPage() {
             <div className="mt-4">
               <ScreenshotCompare
                 figmaSrc={analysis.figma.thumbnailUrl}
+                figmaWidth={analysis.figma.frameWidth}
+                figmaHeight={analysis.figma.frameHeight}
                 websiteSrc={analysis.website.screenshotDataUrl}
                 issues={analysis.issues}
                 activeIssueId={selectedIssueId}
