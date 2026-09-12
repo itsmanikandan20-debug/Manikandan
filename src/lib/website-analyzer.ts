@@ -4,6 +4,36 @@ import { makeId } from "./id";
 
 export class WebsiteAnalysisError extends Error {}
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// On a cold serverless instance, @sparticuz/chromium extracts its bundled
+// Chromium binary to /tmp/chromium the first time it's needed, then reuses
+// that file on subsequent warm invocations. Launching it in the brief
+// window while that extraction is still being written to disk fails with
+// "spawn ETXTBSY" ("text file busy") — a transient race, not a permanent
+// failure. Retrying after a short pause lets the extraction finish and
+// almost always succeeds on the next attempt.
+async function launchServerlessBrowser(): Promise<Browser> {
+  const chromiumMod = await import("@sparticuz/chromium");
+  const chromium = chromiumMod.default;
+  const { chromium: pwChromium } = await import("playwright-core");
+  const executablePath = await chromium.executablePath();
+
+  const attempts = 4;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await pwChromium.launch({ args: chromium.args, executablePath, headless: true });
+    } catch (err) {
+      const isTextBusy = err instanceof Error && err.message.includes("ETXTBSY");
+      if (!isTextBusy || attempt === attempts) throw err;
+      await sleep(400 * attempt);
+    }
+  }
+  throw new Error("unreachable");
+}
+
 // Local dev uses the full `playwright` package (browsers installed via
 // `npx playwright install chromium`). On Vercel's serverless functions we
 // switch to `playwright-core` + `@sparticuz/chromium`, a Chromium build
@@ -13,14 +43,7 @@ async function launchBrowser(): Promise<Browser> {
   const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
 
   if (isServerless) {
-    const chromiumMod = await import("@sparticuz/chromium");
-    const chromium = chromiumMod.default;
-    const { chromium: pwChromium } = await import("playwright-core");
-    return pwChromium.launch({
-      args: chromium.args,
-      executablePath: await chromium.executablePath(),
-      headless: true,
-    });
+    return launchServerlessBrowser();
   }
 
   const { chromium: pwChromium } = await import("playwright");
