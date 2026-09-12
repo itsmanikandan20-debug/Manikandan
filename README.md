@@ -203,6 +203,14 @@ guessing or hard-coding it:
   "Open on Website" instead opens a simulated page inside DesignCheck
   itself (since the demo's website isn't a real URL), scrolled and
   highlighted the same way.
+- **Sites behind bot-protection (Cloudflare, etc.) can't be analyzed.**
+  Some production websites show automated browsers a "verifying you're
+  human" interstitial instead of the real page. DesignCheck waits several
+  extra seconds for this to clear (it often does on lighter protection
+  tiers) and detects when it hasn't — showing a clear warning banner
+  rather than silently comparing against the wrong page — but there's no
+  way to solve a CAPTCHA on someone's behalf, so sites with strict bot
+  protection genuinely can't be analyzed this way.
 - **Responsive checking is heuristic-based**, not pixel-perfect — it flags
   likely overflow, overlapping elements, tiny tap targets, and probable
   text cut-off from the page's rendered layout, clearly labeled as

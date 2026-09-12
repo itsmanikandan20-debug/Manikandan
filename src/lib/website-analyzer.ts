@@ -259,6 +259,40 @@ async function findBrokenLinks(page: Page, limit = 15): Promise<string[]> {
   return broken;
 }
 
+// Detects the common bot-protection interstitials (Cloudflare, generic
+// "verifying you are human" pages, etc.) that some real production sites
+// show to automated browsers. These usually clear on their own within a
+// few seconds — long enough that our normal networkidle wait isn't
+// always sufficient — so we check for one and give it extra time before
+// giving up and just reporting that the challenge was still showing.
+const BOT_CHALLENGE_PATTERNS = [
+  "checking your browser",
+  "verifying you are human",
+  "verify you are human",
+  "performing security verification",
+  "just a moment",
+  "attention required! | cloudflare",
+  "cf-browser-verification",
+  "please stand by, while we are checking your browser",
+  "ddos protection by",
+];
+
+async function looksLikeBotChallenge(page: Page): Promise<boolean> {
+  const text = await page
+    .evaluate(() => `${document.title} ${document.body?.innerText ?? ""}`.toLowerCase())
+    .catch(() => "");
+  return BOT_CHALLENGE_PATTERNS.some((p) => text.includes(p));
+}
+
+async function waitOutBotChallenge(page: Page): Promise<boolean> {
+  let stillBlocked = await looksLikeBotChallenge(page);
+  for (let attempt = 0; attempt < 3 && stillBlocked; attempt++) {
+    await page.waitForTimeout(3000);
+    stillBlocked = await looksLikeBotChallenge(page);
+  }
+  return stillBlocked;
+}
+
 async function findBrokenImages(page: Page): Promise<string[]> {
   return page.evaluate(() => {
     return Array.from(document.querySelectorAll("img"))
@@ -296,6 +330,8 @@ export async function analyzeWebsite(url: string, viewport: Viewport): Promise<W
 
     await page.waitForTimeout(600); // let fonts/late content settle
 
+    const botChallengeDetected = await waitOutBotChallenge(page);
+
     const [raw, brokenLinks, brokenImages, screenshotBuffer] = await Promise.all([
       extractRawElements(page),
       findBrokenLinks(page),
@@ -314,6 +350,7 @@ export async function analyzeWebsite(url: string, viewport: Viewport): Promise<W
       brokenLinks,
       brokenImages,
       isDemo: false,
+      botChallengeDetected,
     };
   } finally {
     await browser.close();

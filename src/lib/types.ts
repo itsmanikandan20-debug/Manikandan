@@ -84,6 +84,11 @@ export interface WebsiteExtraction {
   brokenLinks: string[];
   brokenImages: string[];
   isDemo: boolean;
+  // True if the page looked like a bot-detection interstitial (Cloudflare,
+  // reCAPTCHA, etc.) even after waiting for it to clear — meaning the
+  // screenshot/elements below likely show that challenge page, not the
+  // real site.
+  botChallengeDetected?: boolean;
 }
 
 export type IssueCategory = "visual" | "content" | "layout" | "ux";

@@ -91,6 +91,11 @@ export async function POST(req: Request) {
     const { overallScore, categoryScores } = computeScores(issues);
 
     const warnings: string[] = [];
+    if (website.botChallengeDetected) {
+      warnings.push(
+        "This website appears to be protected by bot-detection (e.g. Cloudflare) that showed our automated browser a \"verifying you're human\" page instead of the real site. The screenshot and issues below reflect that challenge page, not your actual website — this comparison won't be accurate. Sites with this kind of protection generally can't be analyzed this way."
+      );
+    }
     if (Math.abs(figma.frameWidth - viewport.width) > 40) {
       warnings.push(
         `The selected Figma frame is ${figma.frameWidth}px wide, but you're comparing against a ${viewport.width}px website viewport. For the most accurate comparison, pick a Figma frame that matches your chosen viewport width.`
