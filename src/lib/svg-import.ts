@@ -175,6 +175,15 @@ export function parseSvgToFigmaExtraction(svgText: string, fileName: string): Fi
       );
     }
 
+    // A Figma SVG export with embedded bitmap fills carries those images as
+    // inline base64 data — easily several MB for one frame. That's fine for
+    // parsing (already done above), but storing it as a thumbnail risks
+    // being the one thing that exceeds the browser's storage quota.
+    // Skipping an oversized thumbnail trades the preview image for keeping
+    // every score/issue/detail reliably saveable.
+    const MAX_THUMBNAIL_SOURCE_BYTES = 1_500_000;
+    const thumbnailUrl = svgText.length <= MAX_THUMBNAIL_SOURCE_BYTES ? svgToDataUrl(svgText) : undefined;
+
     return {
       fileKey: `svg-upload`,
       fileName: fileName.replace(/\.svg$/i, ""),
@@ -182,7 +191,7 @@ export function parseSvgToFigmaExtraction(svgText: string, fileName: string): Fi
       frameName: fileName.replace(/\.svg$/i, ""),
       frameWidth,
       frameHeight,
-      thumbnailUrl: svgToDataUrl(svgText),
+      thumbnailUrl,
       elements,
       isDemo: false,
     };

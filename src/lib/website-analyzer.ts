@@ -15,11 +15,28 @@ function sleep(ms: number): Promise<void> {
 // "spawn ETXTBSY" ("text file busy") — a transient race, not a permanent
 // failure. Retrying after a short pause lets the extraction finish and
 // almost always succeeds on the next attempt.
+//
+// @sparticuz/chromium only extracts the binary once per container, but if
+// two requests land on the same warm container close together, both would
+// otherwise call executablePath() and race to extract the same file at
+// once — the likely reason ETXTBSY kept recurring even with a retry loop
+// around launch(). Caching the in-flight promise at module scope means a
+// second concurrent call just awaits the first extraction instead of
+// starting its own.
+let cachedExecutablePath: Promise<string> | null = null;
+
 async function launchServerlessBrowser(): Promise<Browser> {
   const chromiumMod = await import("@sparticuz/chromium");
   const chromium = chromiumMod.default;
   const { chromium: pwChromium } = await import("playwright-core");
-  const executablePath = await chromium.executablePath();
+  if (!cachedExecutablePath) cachedExecutablePath = chromium.executablePath();
+  let executablePath: string;
+  try {
+    executablePath = await cachedExecutablePath;
+  } catch (err) {
+    cachedExecutablePath = null; // let a later call retry extraction instead of replaying this rejection forever
+    throw err;
+  }
 
   const attempts = 4;
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -340,6 +357,43 @@ async function findBrokenImages(page: Page): Promise<string[]> {
   });
 }
 
+// A real landing page's full-page screenshot is photographic, not the flat
+// shapes a lossless PNG compresses well — a single tall, image-heavy page
+// can produce a PNG tens of megabytes in size once base64-encoded for
+// storage, which alone blows past a browser's ~5-10MB localStorage quota
+// (measured: a 6000px noise-heavy page came to 32MB as PNG base64 vs
+// 2.7MB capped+JPEG). JPEG compression and a height cap bring every real
+// screenshot down to a predictable, storable size; resizing the viewport
+// to the capped height (rather than using fullPage, which ignores any
+// size limit) is what actually bounds it, since `clip` alone only crops
+// within whatever is already rendered and doesn't reveal more page below
+// the fold.
+const MAX_SCREENSHOT_HEIGHT = 6000;
+const SCREENSHOT_JPEG_QUALITY = 55;
+
+// Responsive checking can capture up to 5 extra screenshots in one
+// analysis (one per other viewport) on top of the main one — that budget
+// needs each of them smaller than the primary comparison screenshot, since
+// they only need to be legible enough to spot overflow/cutoff/overlap, not
+// pixel-accurate for side-by-side comparison.
+const RESPONSIVE_MAX_SCREENSHOT_HEIGHT = 4000;
+const RESPONSIVE_SCREENSHOT_JPEG_QUALITY = 42;
+
+async function captureCappedScreenshot(
+  page: Page,
+  viewport: Viewport,
+  opts: { maxHeight: number; quality: number } = { maxHeight: MAX_SCREENSHOT_HEIGHT, quality: SCREENSHOT_JPEG_QUALITY }
+): Promise<string> {
+  const scrollHeight = await page.evaluate(() => document.body.scrollHeight).catch(() => viewport.height);
+  const capHeight = Math.max(viewport.height, Math.min(scrollHeight, opts.maxHeight));
+  if (capHeight !== viewport.height) {
+    await page.setViewportSize({ width: viewport.width, height: capHeight });
+    await page.waitForTimeout(80);
+  }
+  const buffer = await page.screenshot({ fullPage: false, type: "jpeg", quality: opts.quality });
+  return `data:image/jpeg;base64,${buffer.toString("base64")}`;
+}
+
 export async function analyzeWebsite(url: string, viewport: Viewport): Promise<WebsiteExtraction> {
   let normalizedUrl = url.trim();
   if (!/^https?:\/\//i.test(normalizedUrl)) normalizedUrl = `https://${normalizedUrl}`;
@@ -371,14 +425,13 @@ export async function analyzeWebsite(url: string, viewport: Viewport): Promise<W
 
     const botChallengeDetected = await waitOutBotChallenge(page);
 
-    const [raw, brokenLinks, brokenImages, screenshotBuffer] = await Promise.all([
+    const [raw, brokenLinks, brokenImages] = await Promise.all([
       extractRawElements(page),
       findBrokenLinks(page),
       findBrokenImages(page),
-      page.screenshot({ fullPage: true, type: "png" }),
     ]);
 
-    const screenshotDataUrl = `data:image/png;base64,${screenshotBuffer.toString("base64")}`;
+    const screenshotDataUrl = await captureCappedScreenshot(page, viewport);
 
     return {
       url: normalizedUrl,
@@ -418,14 +471,14 @@ export async function captureResponsiveSnapshot(
     );
     await page.waitForTimeout(400);
 
-    const [raw, brokenImages, screenshotBuffer] = await Promise.all([
-      extractRawElements(page),
-      findBrokenImages(page),
-      page.screenshot({ fullPage: true, type: "png" }),
-    ]);
+    const [raw, brokenImages] = await Promise.all([extractRawElements(page), findBrokenImages(page)]);
+    const screenshotDataUrl = await captureCappedScreenshot(page, viewport, {
+      maxHeight: RESPONSIVE_MAX_SCREENSHOT_HEIGHT,
+      quality: RESPONSIVE_SCREENSHOT_JPEG_QUALITY,
+    });
 
     return {
-      screenshotDataUrl: `data:image/png;base64,${screenshotBuffer.toString("base64")}`,
+      screenshotDataUrl,
       elements: toDesignElements(raw),
       brokenImages,
     };
