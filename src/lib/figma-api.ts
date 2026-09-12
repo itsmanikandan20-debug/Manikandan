@@ -80,6 +80,15 @@ interface FigmaNodesResponse {
   nodes: Record<string, { document: FigmaNode } | null>;
 }
 
+function formatDuration(seconds: number): string {
+  if (seconds < 90) return `about ${Math.round(seconds)} seconds`;
+  const minutes = seconds / 60;
+  if (minutes < 90) return `about ${Math.round(minutes)} minutes`;
+  const hours = minutes / 60;
+  if (hours < 36) return `about ${Math.round(hours)} hours`;
+  return `about ${Math.round(hours / 24)} days`;
+}
+
 async function figmaFetch<T>(path: string, token: string): Promise<T> {
   // OAuth access tokens (what every designer's session holds) go in a
   // Bearer Authorization header — "X-Figma-Token" is only for the older
@@ -95,10 +104,22 @@ async function figmaFetch<T>(path: string, token: string): Promise<T> {
     throw new FigmaApiError("Figma file not found. Make sure the link is correct and the file is shared with your account.");
   }
   if (res.status === 429) {
-    const retryAfter = res.headers.get("Retry-After");
-    const wait = retryAfter ? `about ${retryAfter} seconds` : "a minute or two";
+    const retryAfterSeconds = Number(res.headers.get("Retry-After"));
+    const wait = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0 ? formatDuration(retryAfterSeconds) : "a minute or two";
+
+    // A short wait (seconds/minutes) is normal, ordinary rate-limiting.
+    // A wait measured in hours/days is a different, much stricter quota —
+    // the kind Figma applies to apps still in "Draft" (unpublished)
+    // status, specifically to discourage using dev credentials for real
+    // usage. If you're seeing this, publishing the app (Figma app →
+    // Publish → set Audience to Public) is the real fix, not waiting.
+    const draftHint =
+      retryAfterSeconds > 3600
+        ? " This unusually long wait usually means your Figma app is still in Draft/unpublished status, which has a much stricter quota — publishing the app (with Audience set to Public) should fix this permanently."
+        : "";
+
     throw new FigmaApiError(
-      `Figma is temporarily rate-limiting requests to this file (this happens with large/complex files, or after several attempts in a row). Please wait ${wait} and try again.`
+      `Figma is temporarily rate-limiting requests to this file. Please wait ${wait} and try again.${draftHint}`
     );
   }
   if (!res.ok) {
