@@ -168,7 +168,12 @@ export interface AnalysisResult {
 }
 
 export interface AnalyzeRequestBody {
-  figmaUrl: string;
+  // Exactly one of these two must be provided: figmaUrl fetches the
+  // design live via the signed-in designer's Figma OAuth session;
+  // figmaExtraction is a design already parsed client-side from an
+  // uploaded SVG export, needing no Figma connection at all.
+  figmaUrl?: string;
+  figmaExtraction?: FigmaExtraction;
   websiteUrl: string;
   viewportIndex: number;
   checkResponsive: boolean;

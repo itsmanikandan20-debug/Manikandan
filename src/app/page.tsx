@@ -2,15 +2,16 @@
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Figma, Globe2, Sparkles, ArrowRight, AlertCircle, CheckCircle2, LogOut } from "lucide-react";
+import { Figma, Globe2, Sparkles, ArrowRight, AlertCircle, CheckCircle2, LogOut, Upload, FileImage, X } from "lucide-react";
 import { ViewportSelect } from "@/components/ViewportSelect";
 import { ProgressSteps, type ProgressStep } from "@/components/ProgressSteps";
 import { saveAnalysis } from "@/lib/storage";
 import { useFigmaAccount } from "@/lib/use-figma-account";
-import type { AnalysisResult } from "@/lib/types";
+import { parseSvgToFigmaExtraction, SvgImportError } from "@/lib/svg-import";
+import type { AnalysisResult, FigmaExtraction } from "@/lib/types";
 
 const STEP_LABELS = [
-  "Reading your Figma design",
+  "Reading your design",
   "Opening the live website",
   "Matching design elements to the page",
   "Comparing visuals, content, layout & UX",
@@ -56,11 +57,18 @@ function ConnectNotice() {
   );
 }
 
+type DesignSource = "figma" | "svg";
+
 export default function LandingPage() {
   const router = useRouter();
   const account = useFigmaAccount();
 
+  const [designSource, setDesignSource] = useState<DesignSource>("figma");
   const [figmaUrl, setFigmaUrl] = useState("");
+  const [svgExtraction, setSvgExtraction] = useState<FigmaExtraction | null>(null);
+  const [svgFileName, setSvgFileName] = useState("");
+  const [svgError, setSvgError] = useState<string | null>(null);
+
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [viewportIndex, setViewportIndex] = useState(0);
   const [checkResponsive, setCheckResponsive] = useState(false);
@@ -81,12 +89,37 @@ export default function LandingPage() {
     router.push(`/results/${result.id}`);
   };
 
+  async function handleSvgFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setSvgError(null);
+    setSvgExtraction(null);
+    try {
+      const text = await file.text();
+      const extraction = parseSvgToFigmaExtraction(text, file.name);
+      setSvgExtraction(extraction);
+      setSvgFileName(file.name);
+    } catch (err) {
+      setSvgError(err instanceof SvgImportError ? err.message : "Couldn't read that SVG file. Please try exporting it again.");
+    } finally {
+      e.target.value = ""; // allow re-selecting the same file after fixing an issue
+    }
+  }
+
   async function handleAnalyze(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
 
-    if (!figmaUrl.trim() || !websiteUrl.trim()) {
-      setError("Please enter both a Figma URL and a live website URL.");
+    if (designSource === "figma" && !figmaUrl.trim()) {
+      setError("Please enter a Figma URL.");
+      return;
+    }
+    if (designSource === "svg" && !svgExtraction) {
+      setError("Please upload an SVG export of your design first.");
+      return;
+    }
+    if (!websiteUrl.trim()) {
+      setError("Please enter a live website URL.");
       return;
     }
 
@@ -102,7 +135,13 @@ export default function LandingPage() {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ figmaUrl, websiteUrl, viewportIndex, checkResponsive }),
+        body: JSON.stringify({
+          figmaUrl: designSource === "figma" ? figmaUrl : undefined,
+          figmaExtraction: designSource === "svg" ? svgExtraction : undefined,
+          websiteUrl,
+          viewportIndex,
+          checkResponsive,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -140,7 +179,8 @@ export default function LandingPage() {
     status: i < activeStep ? "done" : i === activeStep ? "active" : "pending",
   }));
 
-  const canAnalyze = account.figmaOAuthConfigured && account.connected;
+  const figmaReady = account.figmaOAuthConfigured && account.connected;
+  const needsFigmaConnect = designSource === "figma" && !account.loading && !figmaReady;
 
   return (
     <main className="mx-auto max-w-content px-6 py-14 lg:px-10">
@@ -157,15 +197,36 @@ export default function LandingPage() {
       </Suspense>
 
       <div className="mx-auto mt-10 max-w-xl rounded-2xl border border-border bg-white p-6 shadow-panel sm:p-8">
+        {!loading && (
+          <div className="mb-6 inline-flex w-full rounded-lg border border-border bg-surface-sunken p-1">
+            <button
+              type="button"
+              onClick={() => setDesignSource("figma")}
+              className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold transition ${
+                designSource === "figma" ? "bg-white text-violet-700 shadow-sm" : "text-ink-muted hover:text-ink"
+              }`}
+            >
+              Connect Figma
+            </button>
+            <button
+              type="button"
+              onClick={() => setDesignSource("svg")}
+              className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold transition ${
+                designSource === "svg" ? "bg-white text-violet-700 shadow-sm" : "text-ink-muted hover:text-ink"
+              }`}
+            >
+              Upload SVG export
+            </button>
+          </div>
+        )}
+
         {loading ? (
           <div className="py-4">
             <h2 className="mb-1 font-display text-lg font-semibold text-ink">Analyzing your design…</h2>
             <p className="mb-6 text-sm text-ink-muted">This usually takes 15–45 seconds.</p>
             <ProgressSteps steps={steps} />
           </div>
-        ) : account.loading ? (
-          <div className="flex items-center justify-center gap-2 py-10 text-sm text-ink-muted">Checking your Figma connection…</div>
-        ) : !canAnalyze ? (
+        ) : needsFigmaConnect ? (
           <div>
             <div className="flex items-center gap-2">
               <span className="flex h-8 w-8 items-center justify-center rounded-full bg-violet-100 text-sm font-bold text-violet-700">1</span>
@@ -182,8 +243,7 @@ export default function LandingPage() {
                 <span>
                   Figma sign-in isn&apos;t configured on this server yet. If this is your deployment, add{" "}
                   <code className="rounded bg-white/60 px-1 py-0.5">FIGMA_CLIENT_ID</code> and{" "}
-                  <code className="rounded bg-white/60 px-1 py-0.5">FIGMA_CLIENT_SECRET</code> — see the README. Otherwise, try the demo
-                  below.
+                  <code className="rounded bg-white/60 px-1 py-0.5">FIGMA_CLIENT_SECRET</code> — see the README.
                 </span>
               </div>
             ) : (
@@ -196,6 +256,22 @@ export default function LandingPage() {
             )}
 
             <div className="relative py-5 text-center text-xs text-ink-muted">
+              <span className="relative bg-white px-3">or, with no Figma connection at all</span>
+              <div className="absolute inset-x-0 top-1/2 -z-10 h-px bg-border" />
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setDesignSource("svg")}
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-violet-200 bg-violet-50 py-3.5 text-sm font-semibold text-violet-700 transition hover:bg-violet-100"
+            >
+              <Upload size={16} /> Upload an SVG export instead
+            </button>
+            <p className="mt-2 text-center text-xs text-ink-muted">
+              Export your Figma frame as SVG and upload it — real analysis, no sign-in needed.
+            </p>
+
+            <div className="relative py-5 text-center text-xs text-ink-muted">
               <span className="relative bg-white px-3">or</span>
               <div className="absolute inset-x-0 top-1/2 -z-10 h-px bg-border" />
             </div>
@@ -204,7 +280,7 @@ export default function LandingPage() {
               type="button"
               onClick={handleDemo}
               disabled={demoLoading}
-              className="flex w-full items-center justify-center gap-2 rounded-xl border border-violet-200 bg-violet-50 py-3.5 text-sm font-semibold text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-white py-3.5 text-sm font-semibold text-ink-soft transition hover:bg-surface-sunken disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Sparkles size={16} /> {demoLoading ? "Loading demo…" : "Try Demo"}
             </button>
@@ -212,7 +288,7 @@ export default function LandingPage() {
           </div>
         ) : (
           <form onSubmit={handleAnalyze} className="space-y-5">
-            {account.connected && (
+            {designSource === "figma" && account.connected && (
               <div className="flex items-center justify-between gap-2 rounded-xl border border-status-approved/30 bg-status-approved-bg px-3.5 py-2.5 text-sm text-status-approved">
                 <span className="flex items-center gap-1.5">
                   <CheckCircle2 size={15} /> Connected to Figma as <strong>{account.handle}</strong>
@@ -223,20 +299,60 @@ export default function LandingPage() {
               </div>
             )}
 
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-ink">Figma Design URL</label>
-              <div className="relative">
-                <Figma className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-muted" size={17} />
-                <input
-                  type="text"
-                  value={figmaUrl}
-                  onChange={(e) => setFigmaUrl(e.target.value)}
-                  placeholder="https://www.figma.com/design/…"
-                  className="w-full rounded-xl border border-border bg-white py-3 pl-11 pr-4 text-sm text-ink shadow-sm outline-none transition placeholder:text-ink-muted/70 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
-                />
+            {designSource === "figma" ? (
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-ink">Figma Design URL</label>
+                <div className="relative">
+                  <Figma className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-muted" size={17} />
+                  <input
+                    type="text"
+                    value={figmaUrl}
+                    onChange={(e) => setFigmaUrl(e.target.value)}
+                    placeholder="https://www.figma.com/design/…"
+                    className="w-full rounded-xl border border-border bg-white py-3 pl-11 pr-4 text-sm text-ink shadow-sm outline-none transition placeholder:text-ink-muted/70 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                  />
+                </div>
+                <p className="mt-1 text-xs text-ink-muted">Right-click a frame in Figma → Copy link to selection.</p>
               </div>
-              <p className="mt-1 text-xs text-ink-muted">Right-click a frame in Figma → Copy link to selection.</p>
-            </div>
+            ) : (
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-ink">Figma SVG export</label>
+                {!svgExtraction ? (
+                  <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border bg-surface-sunken px-4 py-8 text-center transition hover:border-violet-300 hover:bg-violet-50/50">
+                    <Upload size={22} className="text-ink-muted" />
+                    <span className="text-sm font-medium text-ink">Click to upload an SVG file</span>
+                    <span className="text-xs text-ink-muted">In Figma: right-click your frame → Export → SVG</span>
+                    <input type="file" accept=".svg,image/svg+xml" className="hidden" onChange={handleSvgFile} />
+                  </label>
+                ) : (
+                  <div className="flex items-center justify-between gap-2 rounded-xl border border-status-approved/30 bg-status-approved-bg px-3.5 py-3 text-sm text-status-approved">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <FileImage size={16} className="shrink-0" />
+                      <span className="truncate">
+                        {svgFileName} — {svgExtraction.elements.length} elements read, {svgExtraction.frameWidth}×{svgExtraction.frameHeight}px
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => { setSvgExtraction(null); setSvgFileName(""); }}
+                      className="shrink-0 rounded-full p-1 hover:bg-white/60"
+                      title="Remove"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                )}
+                {svgError && (
+                  <p className="mt-1.5 flex items-start gap-1 text-xs text-severity-high">
+                    <AlertCircle size={13} className="mt-0.5 shrink-0" /> {svgError}
+                  </p>
+                )}
+                <p className="mt-1.5 text-xs text-ink-muted">
+                  Tip: enable &quot;Include &apos;id&apos; attribute&quot; in Figma&apos;s SVG export settings (gear icon) for better button/heading
+                  detection. No Figma sign-in needed for this option.
+                </p>
+              </div>
+            )}
 
             <div>
               <label className="mb-1.5 block text-sm font-medium text-ink">Live Website URL</label>
@@ -301,8 +417,8 @@ export default function LandingPage() {
 
       <div className="mx-auto mt-12 grid max-w-3xl gap-4 sm:grid-cols-3">
         {[
-          { title: "1. Connect", text: "Sign in with your own Figma account — DesignCheck only ever sees files you grant access to." },
-          { title: "2. Compare", text: "We match Figma elements to live DOM elements by text, type, position & size." },
+          { title: "1. Connect", text: "Sign in with Figma, or upload an SVG export — no waiting on anyone else either way." },
+          { title: "2. Compare", text: "We match design elements to live DOM elements by text, type, position & size." },
           { title: "3. Report", text: "Review, approve, and export a developer-ready QA report in one click." },
         ].map((card) => (
           <div key={card.title} className="rounded-xl border border-border bg-white p-4 shadow-panel">

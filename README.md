@@ -49,7 +49,36 @@ To stop the app later, click back in the terminal window and press
 
 ---
 
-## Part 2 — Turning on real analysis: "Connect Figma" sign-in (optional)
+## Part 2 — Two ways to provide a real design (pick either)
+
+DesignCheck can read your actual design in two completely different ways.
+**You don't need both — pick whichever is easier for you:**
+
+**Option A: Upload an SVG export.** No setup, no sign-in, works instantly:
+1. In Figma, right-click the frame you want to check → **Export** → choose
+   **SVG** as the format → export it.
+   - Tip: click the gear/settings icon next to the SVG export row and turn
+     on **"Include 'id' attribute"** — this carries each layer's name into
+     the file, which is what lets DesignCheck recognize buttons, headings,
+     and icons correctly. Without it, everything still gets compared by
+     position/size/color/text, just with weaker element-type detection.
+2. On the DesignCheck home page, click the **"Upload SVG export"** tab and
+   choose that file.
+3. That's it — no Figma account, no API keys, no waiting on anyone. This
+   reads the SVG entirely in your own browser.
+4. **What's not included this way:** Figma's Auto Layout spacing/padding
+   rules aren't present in an SVG file, so the few spacing-specific checks
+   that need that data are skipped for an SVG-sourced design (everything
+   else — text, color, size, position — still compares normally).
+
+**Option B: "Connect Figma" sign-in (OAuth).** Reads the file live from
+Figma's servers, so it always reflects the current version and includes
+Auto Layout spacing data — but needs a one-time setup by whoever deploys
+DesignCheck (see below), and each real Figma API request needs the app
+to have been approved by Figma (see "A note on Figma's app review" further
+down) or it will be rate-limited hard while still in Draft.
+
+### Setting up Option B: "Connect Figma" sign-in
 
 Demo Mode uses realistic sample data and needs nothing from you. To let
 designers analyze a *real* Figma file against a *real* website, you (the
@@ -101,6 +130,30 @@ will warn you if the widths look mismatched.
 frame you want to check (e.g. "Desktop / Home"), right-click it →
 **Copy link to selection**. That link includes the frame ID, so
 DesignCheck analyzes exactly that frame instead of guessing.
+
+### A note on Figma's app review (Option B only — Option A needs none of this)
+
+A newly-created Figma app starts in **Draft** status, which carries a
+very strict, multi-day rate limit — meant to stop dev credentials from
+being used for real traffic, not a DesignCheck limitation. To get a
+normal, usable rate limit for anyone other than yourself:
+
+1. In your Figma app's settings → **Publish** → set **Audience to
+   "Public: Anyone using Figma"** (leave "List this app on Community"
+   unchecked — that's only for Figma's public app directory, not needed
+   here) → fill in the description/scopes/testing-instructions steps it
+   asks for → submit.
+2. Figma reviews submitted apps before approving them. There's no
+   published timeline for this, and it's entirely on Figma's side — no
+   code change speeds it up.
+3. Until it's approved, **only your own Figma account can sign in**
+   (other people see "OAuth app with client id ... doesn't exist"), and
+   even your own account is stuck with the Draft-tier rate limit.
+
+**This is exactly why Option A (SVG upload) exists** — if you want to
+demo or use DesignCheck for real before that review completes, or want
+to entirely avoid ever setting up Figma OAuth, uploading an SVG export
+gets you real (non-Demo-Mode) analysis with none of the above.
 
 ---
 
@@ -246,6 +299,7 @@ src/
     session.ts                   Encrypts each designer's Figma tokens into their own cookie
     use-figma-account.ts         Client hook: "is Figma sign-in available, is this visitor connected"
     figma-api.ts               Real Figma REST API client + node-tree extraction (takes a token in)
+    svg-import.ts               Reads an uploaded Figma SVG export in the browser — the no-OAuth path
     website-analyzer.ts        Playwright: screenshot + DOM/CSS extraction + broken link/image checks
     responsive-check.ts        Heuristic overflow/overlap/cutoff checks at other viewport sizes
     matcher.ts                 Figma ↔ website element matching (with confidence scoring)

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { AnalyzeRequestBody, AnalysisResult } from "@/lib/types";
+import type { AnalyzeRequestBody, AnalysisResult, FigmaExtraction } from "@/lib/types";
 import { VIEWPORTS } from "@/lib/types";
 import { getServerConfig } from "@/lib/env";
 import { getSession, buildSessionCookie } from "@/lib/session";
@@ -27,54 +27,64 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
   }
 
-  const { figmaUrl, websiteUrl, viewportIndex, checkResponsive } = body;
+  const { figmaUrl, figmaExtraction: uploadedFigma, websiteUrl, viewportIndex, checkResponsive } = body;
   const viewport = VIEWPORTS[viewportIndex] ?? VIEWPORTS[0];
 
-  if (!figmaUrl?.trim() || !websiteUrl?.trim()) {
-    return NextResponse.json({ error: "Both a Figma URL and a website URL are required." }, { status: 400 });
+  if (!websiteUrl?.trim()) {
+    return NextResponse.json({ error: "A live website URL is required." }, { status: 400 });
+  }
+  if (!figmaUrl?.trim() && !uploadedFigma) {
+    return NextResponse.json({ error: "Provide a Figma URL or upload an SVG export of your design." }, { status: 400 });
   }
 
-  const { figmaConfigured } = getServerConfig();
-  if (!figmaConfigured) {
-    return NextResponse.json(
-      {
-        error:
-          'Figma sign-in isn\'t set up on this server yet (FIGMA_CLIENT_ID / FIGMA_CLIENT_SECRET are missing). Click "Try Demo" to see DesignCheck with sample data in the meantime.',
-        code: "FIGMA_NOT_CONFIGURED",
-      },
-      { status: 400 }
-    );
+  // Two ways to provide the design: a signed-in designer's own Figma URL
+  // (needs FIGMA_CLIENT_ID/SECRET configured + that designer's session),
+  // or an SVG already parsed client-side from an upload — which needs
+  // neither, since no Figma API call happens on that path at all.
+  let refreshedSession = null;
+  let getFigma: () => Promise<FigmaExtraction>;
+
+  if (uploadedFigma) {
+    getFigma = async () => uploadedFigma;
+  } else {
+    const { figmaConfigured } = getServerConfig();
+    if (!figmaConfigured) {
+      return NextResponse.json(
+        {
+          error:
+            'Figma sign-in isn\'t set up on this server yet (FIGMA_CLIENT_ID / FIGMA_CLIENT_SECRET are missing). Click "Try Demo" to see DesignCheck with sample data, or upload an SVG export instead.',
+          code: "FIGMA_NOT_CONFIGURED",
+        },
+        { status: 400 }
+      );
+    }
+
+    const session = getSession(req);
+    if (!session) {
+      return NextResponse.json(
+        {
+          error: 'Connect your Figma account first — click "Connect Figma" above, then try again. Or upload an SVG export instead, which needs no Figma connection.',
+          code: "FIGMA_NOT_CONNECTED",
+        },
+        { status: 401 }
+      );
+    }
+
+    let accessToken: string;
+    try {
+      const result = await getValidAccessToken(session);
+      accessToken = result.accessToken;
+      refreshedSession = result.refreshedSession;
+    } catch (err) {
+      const message = err instanceof FigmaOAuthError ? err.message : "Your Figma connection expired.";
+      return NextResponse.json({ error: message, code: "FIGMA_NOT_CONNECTED" }, { status: 401 });
+    }
+
+    getFigma = () => fetchFigmaExtraction(figmaUrl!, accessToken);
   }
 
-  // Every designer analyzes their own Figma file using their own
-  // connected account — never a token shared across users.
-  const session = getSession(req);
-  if (!session) {
-    return NextResponse.json(
-      {
-        error: 'Connect your Figma account first — click "Connect Figma" above, then try again.',
-        code: "FIGMA_NOT_CONNECTED",
-      },
-      { status: 401 }
-    );
-  }
-
-  let accessToken: string;
-  let refreshedSession;
   try {
-    const result = await getValidAccessToken(session);
-    accessToken = result.accessToken;
-    refreshedSession = result.refreshedSession;
-  } catch (err) {
-    const message = err instanceof FigmaOAuthError ? err.message : "Your Figma connection expired.";
-    return NextResponse.json({ error: message, code: "FIGMA_NOT_CONNECTED" }, { status: 401 });
-  }
-
-  try {
-    const [figma, website] = await Promise.all([
-      fetchFigmaExtraction(figmaUrl, accessToken),
-      analyzeWebsite(websiteUrl, viewport),
-    ]);
+    const [figma, website] = await Promise.all([getFigma(), analyzeWebsite(websiteUrl, viewport)]);
 
     const matches = matchElements(figma.elements, website.elements, figma.frameWidth);
     const page = figma.frameName || "Home";
@@ -101,6 +111,11 @@ export async function POST(req: Request) {
         `The selected Figma frame is ${figma.frameWidth}px wide, but you're comparing against a ${viewport.width}px website viewport. For the most accurate comparison, pick a Figma frame that matches your chosen viewport width.`
       );
     }
+    if (uploadedFigma) {
+      warnings.push(
+        "Design source: uploaded SVG. Auto Layout spacing/gap checks don't apply to SVG-sourced designs (that data isn't present in an SVG export) — everything else (text, color, size, position) is compared normally."
+      );
+    }
 
     let responsive: AnalysisResult["responsive"] = [];
     if (checkResponsive) {
@@ -111,7 +126,7 @@ export async function POST(req: Request) {
     const result: AnalysisResult = {
       id: makeId("analysis"),
       createdAt: new Date().toISOString(),
-      figmaUrl,
+      figmaUrl: figmaUrl || `SVG upload: ${figma.fileName}`,
       websiteUrl,
       viewport,
       isDemo: false,
