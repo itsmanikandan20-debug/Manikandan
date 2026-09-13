@@ -14,17 +14,12 @@ import { IssueDetailPanel } from "@/components/IssueDetailPanel";
 import { ResponsiveFindings } from "@/components/ResponsiveFindings";
 import { CATEGORY_LABEL } from "@/components/Badges";
 
-const CATEGORY_TABS: (IssueCategory | "all")[] = [
-  "all",
-  "content",
-  "extra-text",
-  "colors",
-  "images",
-  "icons",
-  "links",
-  "buttons",
-  "forms",
-];
+const ALL_CATEGORIES: IssueCategory[] = ["content", "extra-text", "colors", "images", "icons", "links", "buttons", "forms"];
+
+// Content and Colors are what most designers scan for first — everything
+// else (extra text, images, icons, links, buttons, forms) is still one
+// click away via its own pill, never hidden, just not shown by default.
+const DEFAULT_CATEGORIES: IssueCategory[] = ["content", "colors"];
 
 const CATEGORY_SCORE_ROWS: { label: string; key: keyof AnalysisResult["categoryScores"] }[] = [
   { label: "Content", key: "content" },
@@ -41,10 +36,19 @@ export default function ResultsPage() {
   const params = useParams<{ id: string }>();
   const [analysis, setAnalysis] = useState<AnalysisResult | null | undefined>(undefined);
   const [tab, setTab] = useState<"overview" | "responsive">("overview");
-  const [categoryFilter, setCategoryFilter] = useState<IssueCategory | "all">("all");
+  const [activeCategories, setActiveCategories] = useState<Set<IssueCategory>>(new Set(DEFAULT_CATEGORIES));
   const [severityFilter, setSeverityFilter] = useState<Severity | "all">("all");
   const [statusFilter, setStatusFilter] = useState<IssueStatus | "all">("all");
   const [selectedIssueId, setSelectedIssueId] = useState<string | null>(null);
+
+  function toggleCategory(c: IssueCategory) {
+    setActiveCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(c)) next.delete(c);
+      else next.add(c);
+      return next;
+    });
+  }
 
   useEffect(() => {
     if (!params.id) return;
@@ -54,12 +58,12 @@ export default function ResultsPage() {
   const filteredIssues = useMemo(() => {
     if (!analysis) return [];
     return analysis.issues.filter((issue) => {
-      if (categoryFilter !== "all" && issue.category !== categoryFilter) return false;
+      if (!activeCategories.has(issue.category)) return false;
       if (severityFilter !== "all" && issue.severity !== severityFilter) return false;
       if (statusFilter !== "all" && issue.status !== statusFilter) return false;
       return true;
     });
-  }, [analysis, categoryFilter, severityFilter, statusFilter]);
+  }, [analysis, activeCategories, severityFilter, statusFilter]);
 
   function updateIssue(updated: Issue) {
     setAnalysis((prev) => {
@@ -220,19 +224,33 @@ export default function ResultsPage() {
               </div>
             </div>
 
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {CATEGORY_TABS.map((c) => (
+            <div className="mt-3 flex flex-wrap items-center gap-1.5">
+              <button
+                onClick={() => setActiveCategories(new Set(ALL_CATEGORIES))}
+                className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                  activeCategories.size === ALL_CATEGORIES.length
+                    ? "bg-violet-600 text-white"
+                    : "bg-surface-sunken text-ink-soft hover:bg-violet-50"
+                }`}
+              >
+                All
+              </button>
+              <span className="mx-0.5 h-4 w-px bg-border" aria-hidden />
+              {ALL_CATEGORIES.map((c) => (
                 <button
                   key={c}
-                  onClick={() => setCategoryFilter(c)}
+                  onClick={() => toggleCategory(c)}
                   className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-                    categoryFilter === c ? "bg-violet-600 text-white" : "bg-surface-sunken text-ink-soft hover:bg-violet-50"
+                    activeCategories.has(c) ? "bg-violet-600 text-white" : "bg-surface-sunken text-ink-soft hover:bg-violet-50"
                   }`}
                 >
-                  {c === "all" ? "All" : CATEGORY_LABEL[c]}
+                  {CATEGORY_LABEL[c]}
                 </button>
               ))}
             </div>
+            <p className="mt-2 text-xs text-ink-muted">
+              Showing {activeCategories.size === ALL_CATEGORIES.length ? "all categories" : Array.from(activeCategories).map((c) => CATEGORY_LABEL[c]).join(" + ") || "no categories — pick one above"}. Click any pill to add or remove it.
+            </p>
 
             <div className="mt-4 space-y-3">
               {filteredIssues.length === 0 ? (

@@ -262,7 +262,16 @@ function matchElementsWithinSection(figmaElsRaw: DesignElement[], websiteElsRaw:
       // same element rendered at a slightly different size — they're two
       // different things. Refuse the candidate outright rather than let
       // text/position coincidentally push it over the match threshold.
-      if (szScore < 0.15) continue;
+      //
+      // This floor does NOT apply to text-ish types (heading/paragraph/
+      // text/link): an SVG <text> element's bounding box hugs its glyphs
+      // tightly, while the equivalent live heading is typically a
+      // block-level element stretched to its container's width — the
+      // exact same word "CRM" can be a 40×18 box in one and a 360×21 box
+      // in the other. Rejecting on size alone threw away obviously-correct
+      // matches (identical text) before text similarity ever got a say.
+      const isTextish = (t: ElementType) => t === "heading" || t === "paragraph" || t === "text" || t === "link";
+      if (!isTextish(fRaw.type) && !isTextish(wRaw.type) && szScore < 0.15) continue;
 
       const txtScore = fRaw.text || wRaw.text ? textSimilarity(fRaw.text, wRaw.text) : 0.5;
       const posScore = 1 - positionDistance(f, w, scale);
