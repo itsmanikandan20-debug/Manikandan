@@ -359,6 +359,10 @@ export function matchElements(figmaElements: DesignElement[], websiteElements: D
   const figmaSections = summarizeSections(figmaElements);
   const websiteSections = summarizeSections(websiteElements);
 
+  let pairs: MatchedPair[];
+  let unmatchedFigmaSections: SectionSummary[] = [];
+  let unmatchedWebsiteSections: SectionSummary[] = [];
+
   // Section-first matching needs real section structure on BOTH sides to
   // mean anything. If one side has no identifiable sections at all (a flat
   // SVG export with no named groups, or a website with no semantic
@@ -368,24 +372,71 @@ export function matchElements(figmaElements: DesignElement[], websiteElements: D
   // section as "missing". Fall back to matching the whole page as a single
   // pool in that case, same as before this feature existed.
   if (figmaSections.length <= 1 || websiteSections.length <= 1) {
-    return { pairs: matchElementsWithinSection(figmaElements, websiteElements, scale), missingSections: [], extraSections: [] };
+    pairs = matchElementsWithinSection(figmaElements, websiteElements, scale);
+  } else {
+    const { pairs: sectionPairs, unmatchedFigma, unmatchedWebsite } = matchSections(figmaSections, websiteSections);
+    pairs = [];
+    for (const { f, w } of sectionPairs) {
+      pairs.push(...matchElementsWithinSection(f.elements, w.elements, scale));
+    }
+    unmatchedFigmaSections = unmatchedFigma;
+    unmatchedWebsiteSections = unmatchedWebsite;
   }
 
-  const { pairs: sectionPairs, unmatchedFigma, unmatchedWebsite } = matchSections(figmaSections, websiteSections);
+  // Global exact-text rescue: the in-section rescue above only catches an
+  // identical-text pair when section-matching already put both elements in
+  // the same pool. It can't help when the mismatch is at the section level
+  // itself — an entire section failed to pair up, or an element inside a
+  // correctly-matched section still lost its individual pairing to
+  // whatever real-page structural quirk (a wrapper element, an unusual
+  // classified type) defeated the section-scoped scoring. This pass looks
+  // across EVERY currently-unmatched element on both sides, regardless of
+  // which section (or no section) it ended up in, and force-pairs any
+  // exact text match it finds — the same rationale as the in-section
+  // version, just without the section boundary limiting what it can see.
+  const figmaById = new Map(figmaElements.map((e) => [e.id, e]));
+  const websiteById = new Map(websiteElements.map((e) => [e.id, e]));
+  const looseFigma: DesignElement[] = [
+    ...pairs.filter((p) => p.figmaId && !p.websiteId).map((p) => figmaById.get(p.figmaId!)!),
+    ...unmatchedFigmaSections.flatMap((s) => s.elements),
+  ];
+  const looseWebsite: DesignElement[] = [
+    ...pairs.filter((p) => p.websiteId && !p.figmaId).map((p) => websiteById.get(p.websiteId!)!),
+    ...unmatchedWebsiteSections.flatMap((s) => s.elements),
+  ];
 
-  const pairs: MatchedPair[] = [];
-  for (const { f, w } of sectionPairs) {
-    pairs.push(...matchElementsWithinSection(f.elements, w.elements, scale));
+  const rescuedFigmaIds = new Set<string>();
+  const rescuedWebsiteIds = new Set<string>();
+  const rescuedPairs: MatchedPair[] = [];
+  for (const f of looseFigma) {
+    const nf = normalizeText(f.text);
+    if (nf.length < 3) continue;
+    const match = looseWebsite.find((w) => !rescuedWebsiteIds.has(w.id) && normalizeText(w.text) === nf);
+    if (!match) continue;
+    rescuedFigmaIds.add(f.id);
+    rescuedWebsiteIds.add(match.id);
+    rescuedPairs.push({ figmaId: f.id, websiteId: match.id, confidence: 85 });
+  }
+
+  if (rescuedPairs.length > 0) {
+    pairs = pairs.filter(
+      (p) =>
+        !((p.figmaId && rescuedFigmaIds.has(p.figmaId) && !p.websiteId) || (p.websiteId && rescuedWebsiteIds.has(p.websiteId) && !p.figmaId))
+    );
+    pairs.push(...rescuedPairs);
   }
 
   // A section with nothing to match on the other side is reported once —
-  // its elements are deliberately NOT also run through element-level
+  // its elements are deliberately NOT also run through per-element
   // matching (which would just re-produce the same "missing" finding once
   // per element inside it, the exact noise this two-phase approach exists
-  // to remove).
-  return {
-    pairs,
-    missingSections: unmatchedFigma.map((s) => ({ name: s.name, elements: s.elements })),
-    extraSections: unmatchedWebsite.map((s) => ({ name: s.name, elements: s.elements })),
-  };
+  // to remove) — except for whatever the rescue pass just pulled out.
+  const missingSections = unmatchedFigmaSections
+    .map((s) => ({ name: s.name, elements: s.elements.filter((e) => !rescuedFigmaIds.has(e.id)) }))
+    .filter((s) => s.elements.length > 0);
+  const extraSections = unmatchedWebsiteSections
+    .map((s) => ({ name: s.name, elements: s.elements.filter((e) => !rescuedWebsiteIds.has(e.id)) }))
+    .filter((s) => s.elements.length > 0);
+
+  return { pairs, missingSections, extraSections };
 }

@@ -16,10 +16,10 @@ import { CATEGORY_LABEL } from "@/components/Badges";
 
 const ALL_CATEGORIES: IssueCategory[] = ["content", "extra-text", "colors", "images", "icons", "links", "buttons", "forms"];
 
-// Content and Colors are what most designers scan for first — everything
-// else (extra text, images, icons, links, buttons, forms) is still one
-// click away via its own pill, never hidden, just not shown by default.
-const DEFAULT_CATEGORIES: IssueCategory[] = ["content", "colors"];
+// Content is what's shown by default — everything else (extra text,
+// colors, images, icons, links, buttons, forms) is still one click away
+// via its own pill, never hidden, just not shown until asked for.
+const DEFAULT_CATEGORIES: IssueCategory[] = ["content"];
 
 const CATEGORY_SCORE_ROWS: { label: string; key: keyof AnalysisResult["categoryScores"] }[] = [
   { label: "Content", key: "content" },
