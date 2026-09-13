@@ -246,12 +246,37 @@ function matchElementsWithinSection(figmaElsRaw: DesignElement[], websiteElsRaw:
   const wLeft = websitePool.length ? Math.min(...websitePool.map((e) => e.x)) : 0;
   const relative = (el: DesignElement, top: number, left: number) => ({ ...el, x: el.x - left, y: el.y - top });
 
+  const usedFigma = new Set<string>();
+  const usedWebsite = new Set<string>();
+  const pairs: MatchedPair[] = [];
+
+  // Exact text wins regardless of type or size, before any fuzzy scoring
+  // happens — real pages have all sorts of structural quirks (an inline
+  // link wrapping different text than expected, a wrapper element with a
+  // slightly odd classified type, a stray tracking element) that can throw
+  // off type/size-based scoring even when two elements plainly say the
+  // same thing. Identical text within the same section is about as strong
+  // a signal as exists that two elements are the same one.
+  const EXACT_TEXT_MIN_LENGTH = 3; // skip near-empty strings, too easy to collide by coincidence
+  for (const fRaw of figmaPool) {
+    if (usedFigma.has(fRaw.id)) continue;
+    const nf = normalizeText(fRaw.text);
+    if (nf.length < EXACT_TEXT_MIN_LENGTH) continue;
+    const match = websitePool.find((w) => !usedWebsite.has(w.id) && normalizeText(w.text) === nf);
+    if (!match) continue;
+    usedFigma.add(fRaw.id);
+    usedWebsite.add(match.id);
+    pairs.push({ figmaId: fRaw.id, websiteId: match.id, confidence: 95 });
+  }
+
   type Candidate = { figmaId: string; websiteId: string; score: number };
   const candidates: Candidate[] = [];
 
   for (const fRaw of figmaPool) {
+    if (usedFigma.has(fRaw.id)) continue;
     const f = relative(fRaw, fTop, fLeft);
     for (const wRaw of websitePool) {
+      if (usedWebsite.has(wRaw.id)) continue;
       const w = relative(wRaw, wTop, wLeft);
       const tScore = typeScore(fRaw.type, wRaw.type);
       if (tScore === 0) continue;
@@ -282,10 +307,6 @@ function matchElementsWithinSection(figmaElsRaw: DesignElement[], websiteElsRaw:
   }
 
   candidates.sort((a, b) => b.score - a.score);
-
-  const usedFigma = new Set<string>();
-  const usedWebsite = new Set<string>();
-  const pairs: MatchedPair[] = [];
 
   for (const c of candidates) {
     if (usedFigma.has(c.figmaId) || usedWebsite.has(c.websiteId)) continue;
