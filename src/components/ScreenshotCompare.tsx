@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import type { Issue, Severity } from "@/lib/types";
+import type { DesignElement, Issue, MatchedPair, Severity } from "@/lib/types";
+import { SectionCompare } from "./SectionCompare";
 
 const SEVERITY_COLOR: Record<Severity, string> = {
   high: "#E4342A",
@@ -87,13 +88,16 @@ function ImagePanel({ src, label, issues, space, activeIssueId, onSelectIssue, o
   );
 }
 
-type Mode = "side-by-side" | "overlay" | "diff";
+type Mode = "side-by-side" | "overlay" | "diff" | "section";
 
 export function ScreenshotCompare({
   figmaSrc,
   figmaWidth,
   figmaHeight,
+  figmaElements,
   websiteSrc,
+  websiteElements,
+  matches,
   issues,
   activeIssueId,
   onSelectIssue,
@@ -101,23 +105,31 @@ export function ScreenshotCompare({
   figmaSrc?: string;
   figmaWidth?: number;
   figmaHeight?: number;
+  // Only needed for the "By Section" mode — when omitted, that tab is
+  // hidden rather than shown broken (e.g. the single-issue view in
+  // IssueDetailPanel doesn't have a reason to offer section navigation).
+  figmaElements?: DesignElement[];
   websiteSrc?: string;
+  websiteElements?: DesignElement[];
+  matches?: MatchedPair[];
   issues: Issue[];
   activeIssueId?: string | null;
   onSelectIssue?: (id: string) => void;
 }) {
   const [mode, setMode] = useState<Mode>("side-by-side");
   const [overlayOpacity, setOverlayOpacity] = useState(50);
+  const sectionModeAvailable = Boolean(figmaElements && websiteElements && matches);
 
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="inline-flex rounded-lg border border-border bg-surface-sunken p-1">
+        <div className="inline-flex flex-wrap rounded-lg border border-border bg-surface-sunken p-1">
           {(
             [
               ["side-by-side", "Side by Side"],
               ["overlay", "Overlay"],
               ["diff", "Difference Highlight"],
+              ...(sectionModeAvailable ? ([["section", "By Section"]] as [Mode, string][]) : []),
             ] as [Mode, string][]
           ).map(([value, label]) => (
             <button
@@ -190,6 +202,21 @@ export function ScreenshotCompare({
             </p>
             <ImagePanel src={websiteSrc} label="Website" issues={issues} space="website" activeIssueId={activeIssueId} onSelectIssue={onSelectIssue} />
           </div>
+        )}
+
+        {mode === "section" && sectionModeAvailable && (
+          <SectionCompare
+            figmaSrc={figmaSrc}
+            figmaWidth={figmaWidth}
+            figmaHeight={figmaHeight}
+            figmaElements={figmaElements!}
+            websiteSrc={websiteSrc}
+            websiteElements={websiteElements!}
+            matches={matches!}
+            issues={issues}
+            activeIssueId={activeIssueId}
+            onSelectIssue={onSelectIssue}
+          />
         )}
       </div>
     </div>

@@ -186,7 +186,10 @@ export default function ResultsPage() {
                 figmaSrc={analysis.figma.thumbnailUrl}
                 figmaWidth={analysis.figma.frameWidth}
                 figmaHeight={analysis.figma.frameHeight}
+                figmaElements={analysis.figma.elements}
                 websiteSrc={analysis.website.screenshotDataUrl}
+                websiteElements={analysis.website.elements}
+                matches={analysis.matches}
                 issues={analysis.issues}
                 activeIssueId={selectedIssueId}
                 onSelectIssue={setSelectedIssueId}
