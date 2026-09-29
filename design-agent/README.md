@@ -5,8 +5,8 @@ An AI UX/UI design partner that sits beside you while you work. It runs on
 
 > **Where we are:** you can **talk** to your design partner, it **talks back**,
 > it can **see the website open in Chrome** and **your design in Figma**, and it
-> **points** at what it's talking about with its own orange arrow. Making changes
-> in Figma (only after you say yes) comes next. The full plan is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+> **points** at what it's talking about with its own orange arrow, and it can
+> **change your Figma design after you say yes**. Screenshots into Figma come next. The full plan is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Talking to it
 
@@ -40,7 +40,25 @@ this typography good?"** or **"How can I improve this section?"** It reads your
 real layers (auto-layout gaps and padding, text styles, colours, components)
 and a picture of the frame. Select a layer or frame to focus on it; with nothing
 selected it looks at the frames on screen. Its orange arrow appears on the
-canvas too. It doesn't change your design.
+canvas too.
+
+## Changing your Figma design (only after you say yes)
+
+It can change text, font size, font, line height, colours, auto-layout spacing
+and padding, position, size, corner radius and layer names, and it can
+duplicate, group or turn layers into components. It **never changes anything on
+its own**:
+
+1. It suggests a change and asks, e.g. "I can make that gap 24. Want me to?"
+2. An **approval card** shows exactly what will change (for example
+   "Homepage gap 40 → 24").
+3. Say **"yes"** (or click **Apply**) to do it. Say **"no"** (or click **Not
+   now**) to leave it. Anything else just continues the conversation.
+4. It makes the change, looks at the result and tells you how it turned out.
+5. Changed your mind? Say **"undo"** (or click **Undo**), or press **Ctrl + Z** in Figma.
+
+Only your own "yes" or click can approve a change: the AI can't approve its own
+suggestions.
 
 It knows whether you mean the website or Figma from what you used last, or say
 "on the website" / "in Figma". When it's connected,

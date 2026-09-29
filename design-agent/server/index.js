@@ -231,6 +231,8 @@ wss.on("connection", (socket) => {
       clients[role].add(socket);
       if (role === "console") {
         send(socket, { type: "history", messages: agent.history() });
+        const waiting = agent.pendingApproval();
+        if (waiting) send(socket, { type: "approval", ...waiting });
         send(socket, { type: "status", ...agent.status(), connections: connections() });
       } else {
         if (role === "browser") {
@@ -253,6 +255,10 @@ wss.on("connection", (socket) => {
     if (role === "console") {
       if (message.type === "chat") agent.handleUserText(message.text);
       if (message.type === "reset") agent.reset();
+      // Only a click in the helper window (or your clear "yes") can approve a change.
+      if (message.type === "approve") agent.approve(String(message.id || ""));
+      if (message.type === "reject") agent.reject(String(message.id || ""));
+      if (message.type === "undo") agent.undoLast();
       // The helper window says when to move the pointer (in time with the voice).
       if (message.type === "point") pointAt(String(message.target || ""));
       if (message.type === "point_clear") clearPointers();

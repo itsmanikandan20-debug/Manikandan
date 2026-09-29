@@ -2,7 +2,8 @@
 // - Describes what you're looking at (selection, or the frames in view) for the AI:
 //   layers with ids, text, fonts, colours, sizes, auto-layout spacing, components, styles.
 // - Draws Design Agent's own orange pointer on the canvas (a temporary, locked layer).
-// It does NOT change your design. Changes come in a later step, and only after you approve.
+// - Applies changes to your design ONLY when Design Agent sends ones you approved
+//   (the approval happens in Design Agent; this file just carries them out), and can undo them.
 
 figma.showUI(__html__, { width: 260, height: 104, title: "Design Agent" });
 
@@ -88,12 +89,16 @@ function backgroundBehind(node) {
   return WHITE;
 }
 
+// Where each layer's listed x/y were measured from (its root frame), from the last description.
+const lastOrigins = new Map();
+
 // ---------- describing the design ----------
 async function describeNode(node, origin, lines, state, depth, prevBottom) {
   if (state.count >= MAX_NODES || node.visible === false || isPointer(node)) return null;
   const box = node.absoluteBoundingBox;
   if (!box) return null;
   state.count++;
+  lastOrigins.set(node.id, origin);
 
   const parts = [node.id, node.type.toLowerCase(), JSON.stringify(node.name.length > 60 ? node.name.slice(0, 57) + "..." : node.name)];
   parts.push(`x${round(box.x - origin.x)} y${round(box.y - origin.y)} ${round(box.width)}x${round(box.height)}`);
@@ -369,9 +374,360 @@ async function point(target) {
   return { ok: true };
 }
 
+// ---------- changing the design (only approved changes arrive here) ----------
+function parseHex(value) {
+  const m = String(value || "").trim().match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (!m) return null;
+  let h = m[1];
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  return { r: parseInt(h.slice(0, 2), 16) / 255, g: parseInt(h.slice(2, 4), 16) / 255, b: parseInt(h.slice(4, 6), 16) / 255 };
+}
+function inAutoLayout(node) {
+  return node.parent && "layoutMode" in node.parent && node.parent.layoutMode && node.parent.layoutMode !== "NONE" && node.layoutPositioning !== "ABSOLUTE";
+}
+async function loadFontsOf(node) {
+  if (node.type !== "TEXT") return;
+  const fonts = node.characters.length ? node.getRangeAllFontNames(0, node.characters.length) : [node.fontName];
+  for (const font of fonts) {
+    if (font === figma.mixed) continue;
+    try {
+      await figma.loadFontAsync(font);
+    } catch (e) {
+      throw new Error(`the font "${font.family} ${font.style}" isn't available on this computer`);
+    }
+  }
+}
+function pad4(node) {
+  return [node.paddingTop, node.paddingRight, node.paddingBottom, node.paddingLeft].map(round).join(" ");
+}
+function nameOf(node) {
+  return `"${node.name}"`;
+}
+
+/**
+ * Checks each change and describes it as "before → after" for the approval card.
+ * Changes nothing. Returns { lines, problems, valid } (valid: one true/false per change).
+ */
+async function preview(changes) {
+  const lines = [];
+  const problems = [];
+  const valid = [];
+  for (const c of changes) {
+    try {
+      lines.push(await describeChange(c));
+      valid.push(true);
+    } catch (error) {
+      problems.push(`${c.action} ${c.id || (c.ids || []).join(",")}: ${error.message}`);
+      valid.push(false);
+    }
+  }
+  return { lines, problems, valid };
+}
+
+async function need(id) {
+  const node = id ? await figma.getNodeByIdAsync(String(id)) : null;
+  if (!node || node.removed || node.type === "PAGE" || node.type === "DOCUMENT") throw new Error(`layer ${id} not found`);
+  if (isPointer(node)) throw new Error("that's the pointer, not a design layer");
+  return node;
+}
+
+async function describeChange(c) {
+  const node = c.action === "group" ? null : await need(c.id);
+  switch (c.action) {
+    case "set_text":
+      if (node.type !== "TEXT") throw new Error("not a text layer");
+      return `${nameOf(node)} text: "${node.characters.slice(0, 40)}" → "${String(c.text).slice(0, 40)}"`;
+    case "set_font_size":
+      if (node.type !== "TEXT") throw new Error("not a text layer");
+      if (!(c.font_size > 0)) throw new Error("font size must be a positive number");
+      return `${nameOf(node)} font size: ${node.fontSize === figma.mixed ? "mixed" : round(node.fontSize)} → ${round(c.font_size)}`;
+    case "set_font": {
+      if (node.type !== "TEXT") throw new Error("not a text layer");
+      const font = { family: c.font_family || (node.fontName !== figma.mixed ? node.fontName.family : "Inter"), style: c.font_style || "Regular" };
+      try {
+        await figma.loadFontAsync(font);
+      } catch (e) {
+        throw new Error(`the font "${font.family} ${font.style}" isn't available`);
+      }
+      const before = node.fontName === figma.mixed ? "mixed" : `${node.fontName.family} ${node.fontName.style}`;
+      return `${nameOf(node)} font: ${before} → ${font.family} ${font.style}`;
+    }
+    case "set_line_height":
+      if (node.type !== "TEXT") throw new Error("not a text layer");
+      return `${nameOf(node)} line height: ${node.lineHeight === figma.mixed ? "mixed" : node.lineHeight.unit === "AUTO" ? "auto" : round(node.lineHeight.value)} → ${round(c.line_height)}`;
+    case "set_fill": {
+      if (!("fills" in node)) throw new Error("this layer has no fill");
+      if (!parseHex(c.color)) throw new Error(`"${c.color}" isn't a colour like #1A1A1A`);
+      const styleNote = node.fillStyleId && node.fillStyleId !== figma.mixed ? " (detaches its colour style)" : "";
+      return `${nameOf(node)} colour: ${describePaints(node.fills) || "none"} → ${c.color.toUpperCase()}${styleNote}`;
+    }
+    case "set_spacing": {
+      if (!("layoutMode" in node) || node.layoutMode === "NONE") throw new Error("not an auto-layout frame (no gap to change)");
+      const bits = [];
+      if (c.gap !== undefined) bits.push(`gap ${round(node.itemSpacing)} → ${round(c.gap)}`);
+      const next = [c.padding_top, c.padding_right, c.padding_bottom, c.padding_left];
+      if (c.padding !== undefined || next.some((v) => v !== undefined)) {
+        const after = [0, 1, 2, 3].map((i) => (next[i] !== undefined ? next[i] : c.padding !== undefined ? c.padding : [node.paddingTop, node.paddingRight, node.paddingBottom, node.paddingLeft][i]));
+        bits.push(`padding ${pad4(node)} → ${after.map(round).join(" ")}`);
+      }
+      if (!bits.length) throw new Error("no gap or padding given");
+      return `${nameOf(node)} ${bits.join(", ")}`;
+    }
+    case "move_by":
+    case "move_to": {
+      if (inAutoLayout(node)) throw new Error("it's inside an auto-layout frame, so its position comes from the layout (change spacing or order instead)");
+      if (c.action === "move_by") return `${nameOf(node)} move by ${round(c.dx || 0)}, ${round(c.dy || 0)}`;
+      return `${nameOf(node)} move to x${round(c.x)} y${round(c.y)}`;
+    }
+    case "resize": {
+      if (!("resize" in node)) throw new Error("this layer can't be resized");
+      const w = c.width !== undefined ? c.width : node.width;
+      const h = c.height !== undefined ? c.height : node.height;
+      const hug = inAutoLayout(node) || ("layoutMode" in node && node.layoutMode !== "NONE") ? " (sets its size to fixed)" : "";
+      return `${nameOf(node)} size: ${round(node.width)}×${round(node.height)} → ${round(w)}×${round(h)}${hug}`;
+    }
+    case "set_radius":
+      if (!("cornerRadius" in node)) throw new Error("this layer has no corner radius");
+      return `${nameOf(node)} corner radius: ${node.cornerRadius === figma.mixed ? "mixed" : round(node.cornerRadius)} → ${round(c.radius)}`;
+    case "rename":
+      return `Rename ${nameOf(node)} → "${c.name}"`;
+    case "duplicate":
+      return `Duplicate ${nameOf(node)}`;
+    case "create_component":
+      if (!["FRAME", "GROUP", "RECTANGLE", "TEXT", "ELLIPSE", "VECTOR"].includes(node.type)) throw new Error("only frames, groups and shapes can become components");
+      return `Turn ${nameOf(node)} into a component`;
+    case "group": {
+      const nodes = [];
+      for (const id of c.ids || []) nodes.push(await need(id));
+      if (nodes.length < 2) throw new Error("need at least two layers to group");
+      if (nodes.some((n) => n.parent !== nodes[0].parent)) throw new Error("layers must be in the same parent to group");
+      return `Group ${nodes.map(nameOf).join(", ")}${c.name ? ` as "${c.name}"` : ""}`;
+    }
+    default:
+      throw new Error(`unknown change "${c.action}"`);
+  }
+}
+
+// What each applied batch changed, so it can be undone.
+const undoLog = new Map();
+let undoCounter = 0;
+
+function snapshotProps(node) {
+  const before = { id: node.id, name: node.name, x: node.x, y: node.y, width: node.width, height: node.height };
+  if ("fills" in node && node.fills !== figma.mixed) before.fills = node.fills;
+  if ("fillStyleId" in node && node.fillStyleId !== figma.mixed) before.fillStyleId = node.fillStyleId;
+  if ("cornerRadius" in node && node.cornerRadius !== figma.mixed) before.cornerRadius = node.cornerRadius;
+  if ("layoutMode" in node && node.layoutMode !== "NONE") {
+    before.spacing = { itemSpacing: node.itemSpacing, paddingTop: node.paddingTop, paddingRight: node.paddingRight, paddingBottom: node.paddingBottom, paddingLeft: node.paddingLeft };
+  }
+  if ("layoutSizingHorizontal" in node) before.sizing = [node.layoutSizingHorizontal, node.layoutSizingVertical];
+  if (node.type === "TEXT") {
+    before.characters = node.characters;
+    if (node.fontSize !== figma.mixed) before.fontSize = node.fontSize;
+    if (node.fontName !== figma.mixed) before.fontName = node.fontName;
+    if (node.lineHeight !== figma.mixed) before.lineHeight = node.lineHeight;
+  }
+  return before;
+}
+
+async function applyOne(c, record) {
+  if (c.action === "group") {
+    const nodes = [];
+    for (const id of c.ids || []) nodes.push(await need(id));
+    const group = figma.group(nodes, nodes[0].parent);
+    if (c.name) group.name = c.name;
+    record.push({ kind: "ungroup", id: group.id });
+    return group;
+  }
+  const node = await need(c.id);
+  if (c.action === "duplicate") {
+    const copy = node.clone();
+    const parent = node.parent;
+    parent.insertChild(parent.children.indexOf(node) + 1, copy);
+    if (!inAutoLayout(copy)) copy.x = node.x + node.width + 40;
+    record.push({ kind: "remove", id: copy.id });
+    return copy;
+  }
+  if (c.action === "create_component") {
+    const component = figma.createComponentFromNode(node);
+    record.push({ kind: "none", note: "turned into a component (use Ctrl+Z in Figma to undo)" });
+    return component;
+  }
+
+  record.push({ kind: "restore", action: c.action, before: snapshotProps(node) });
+  switch (c.action) {
+    case "set_text":
+      await loadFontsOf(node);
+      node.characters = String(c.text);
+      break;
+    case "set_font_size":
+      await loadFontsOf(node);
+      node.fontSize = Number(c.font_size);
+      break;
+    case "set_font": {
+      const font = { family: c.font_family || node.fontName.family, style: c.font_style || "Regular" };
+      await figma.loadFontAsync(font);
+      await loadFontsOf(node);
+      node.fontName = font;
+      break;
+    }
+    case "set_line_height":
+      await loadFontsOf(node);
+      node.lineHeight = { value: Number(c.line_height), unit: "PIXELS" };
+      break;
+    case "set_fill": {
+      const color = parseHex(c.color);
+      const old = firstSolid(node.fills);
+      node.fills = [{ type: "SOLID", color, opacity: old && old.opacity !== undefined ? old.opacity : 1 }];
+      break;
+    }
+    case "set_spacing":
+      if (c.gap !== undefined) node.itemSpacing = Number(c.gap);
+      if (c.padding !== undefined) node.paddingTop = node.paddingRight = node.paddingBottom = node.paddingLeft = Number(c.padding);
+      if (c.padding_top !== undefined) node.paddingTop = Number(c.padding_top);
+      if (c.padding_right !== undefined) node.paddingRight = Number(c.padding_right);
+      if (c.padding_bottom !== undefined) node.paddingBottom = Number(c.padding_bottom);
+      if (c.padding_left !== undefined) node.paddingLeft = Number(c.padding_left);
+      break;
+    case "move_by":
+      node.x += Number(c.dx || 0);
+      node.y += Number(c.dy || 0);
+      break;
+    case "move_to": {
+      // x/y are relative to the root frame used in the description.
+      const origin = lastOrigins.get(node.id) || { x: 0, y: 0 };
+      const abs = node.absoluteBoundingBox;
+      node.x += origin.x + Number(c.x) - abs.x;
+      node.y += origin.y + Number(c.y) - abs.y;
+      break;
+    }
+    case "resize":
+      if ("layoutSizingHorizontal" in node && (inAutoLayout(node) || ("layoutMode" in node && node.layoutMode !== "NONE"))) {
+        if (c.width !== undefined) node.layoutSizingHorizontal = "FIXED";
+        if (c.height !== undefined) node.layoutSizingVertical = "FIXED";
+      }
+      if (node.type === "TEXT") await loadFontsOf(node);
+      node.resize(c.width !== undefined ? Number(c.width) : node.width, c.height !== undefined ? Number(c.height) : node.height);
+      break;
+    case "set_radius":
+      node.cornerRadius = Number(c.radius);
+      break;
+    case "rename":
+      node.name = String(c.name);
+      break;
+    default:
+      throw new Error(`unknown change "${c.action}"`);
+  }
+  return node;
+}
+
+async function apply(changes) {
+  removePointer();
+  const record = [];
+  const results = [];
+  const touched = [];
+  for (const c of changes) {
+    try {
+      const node = await applyOne(c, record);
+      if (node) touched.push(node);
+      results.push({ ok: true, change: c.action, id: c.id || (c.ids || []).join(",") });
+    } catch (error) {
+      results.push({ ok: false, change: c.action, id: c.id || (c.ids || []).join(","), error: error.message });
+    }
+  }
+  figma.commitUndo(); // so Ctrl+Z in Figma undoes exactly this batch
+  const token = `u${++undoCounter}`;
+  undoLog.set(token, record);
+
+  // Describe the result so Design Agent can check it (VERIFY).
+  const lines = [];
+  const state = { count: 0 };
+  for (const node of touched.slice(0, 6)) {
+    if (node.removed) continue;
+    await describeNode(node, lastOrigins.get(node.id) || node.absoluteBoundingBox || { x: 0, y: 0 }, lines, state, 0, null);
+  }
+  let screenshot = null;
+  const root = touched.length ? topFrame(touched[0]) : null;
+  if (root && root.absoluteBoundingBox) {
+    try {
+      const b = root.absoluteBoundingBox;
+      const scale = Math.max(0.05, Math.min(2, 1400 / Math.max(b.width, b.height)));
+      screenshot = figma.base64Encode(await root.exportAsync({ format: "JPG", constraint: { type: "SCALE", value: scale } }));
+    } catch (e) {
+      screenshot = null;
+    }
+  }
+  if (touched[0] && !touched[0].removed) figma.currentPage.selection = [touched[0]];
+  return { results, token, after: lines.join("\n"), screenshot };
+}
+
+function topFrame(node) {
+  let n = node;
+  while (n.parent && n.parent.type !== "PAGE") n = n.parent;
+  return n;
+}
+
+async function undo(token) {
+  const record = undoLog.get(token);
+  if (!record) return { ok: false, reason: "nothing to undo" };
+  const notes = [];
+  for (const step of record.slice().reverse()) {
+    try {
+      if (step.kind === "remove") {
+        const n = await figma.getNodeByIdAsync(step.id);
+        if (n && !n.removed) n.remove();
+      } else if (step.kind === "ungroup") {
+        const n = await figma.getNodeByIdAsync(step.id);
+        if (n && !n.removed) figma.ungroup(n);
+      } else if (step.kind === "restore") {
+        const b = step.before;
+        const n = await figma.getNodeByIdAsync(b.id);
+        if (!n || n.removed) continue;
+        if (n.type === "TEXT") await loadFontsOf(n);
+        if (b.fontName) {
+          await figma.loadFontAsync(b.fontName);
+          n.fontName = b.fontName;
+        }
+        if (b.characters !== undefined && n.characters !== b.characters) n.characters = b.characters;
+        if (b.fontSize !== undefined) n.fontSize = b.fontSize;
+        if (b.lineHeight !== undefined) n.lineHeight = b.lineHeight;
+        if (b.fillStyleId) await n.setFillStyleIdAsync(b.fillStyleId);
+        else if (b.fills !== undefined) n.fills = b.fills;
+        if (b.spacing) Object.assign(n, b.spacing);
+        if (b.cornerRadius !== undefined) n.cornerRadius = b.cornerRadius;
+        if (b.sizing) {
+          try {
+            n.layoutSizingHorizontal = b.sizing[0];
+            n.layoutSizingVertical = b.sizing[1];
+          } catch (e) {
+            // not in auto-layout; size is restored below
+          }
+        }
+        if (n.name !== b.name) n.name = b.name;
+        const fixed = !b.sizing || (b.sizing[0] === "FIXED" && b.sizing[1] === "FIXED");
+        if (step.action === "resize" && "resize" in n && fixed && (Math.abs(n.width - b.width) > 0.01 || Math.abs(n.height - b.height) > 0.01)) n.resize(b.width, b.height);
+        if (/^move_|^resize$/.test(step.action) && !inAutoLayout(n)) {
+          n.x = b.x;
+          n.y = b.y;
+        }
+      } else if (step.note) {
+        notes.push(step.note);
+      }
+    } catch (error) {
+      notes.push(error.message);
+    }
+  }
+  figma.commitUndo();
+  undoLog.delete(token);
+  return { ok: true, notes };
+}
+
 // ---------- talking to Design Agent (through the plugin window) ----------
 async function runTool(tool, args) {
   if (tool === "figma.snapshot") return snapshot();
+  if (tool === "figma.preview") return preview(args.changes || []);
+  if (tool === "figma.apply") return apply(args.changes || []);
+  if (tool === "figma.undo") return undo(args.token);
   if (tool === "figma.point") return point(args.target);
   if (tool === "figma.hide") {
     removePointer();

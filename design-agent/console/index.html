@@ -75,6 +75,18 @@
       <p id="voice-state" class="voice-state">Tap to start talking</p>
       <p id="caption" class="caption">Try saying: “How do I make a button stand out?”</p>
       <p id="problem" class="problem" role="alert" hidden></p>
+      <div id="approval" class="approval" hidden>
+        <p id="approval-kind" class="approval-kind">Change needs your OK</p>
+        <p id="approval-summary" class="approval-summary"></p>
+        <ul id="approval-lines" class="approval-lines"></ul>
+        <p id="approval-problems" class="approval-problems" hidden></p>
+        <div id="approval-actions" class="approval-actions">
+          <button type="button" id="approve-btn" class="primary">Apply</button>
+          <button type="button" id="reject-btn" class="icon-btn">Not now</button>
+        </div>
+        <p id="approval-state" class="approval-state" hidden></p>
+        <p id="approval-hint" class="approval-hint">Or just say “yes” or “no”.</p>
+      </div>
     </section>
 
     <section id="chat" class="chat" aria-live="polite">

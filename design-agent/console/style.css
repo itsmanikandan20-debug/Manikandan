@@ -75,6 +75,18 @@ body.text-hidden .stage { flex: 1; border-bottom: 0; }
 .caption[data-who="you"] { color: var(--ink); font-style: italic; }
 .problem { margin: 4px 0 0; background: var(--warn-soft); color: var(--warn); border-radius: 10px; padding: 8px 12px; font-size: 14px; max-width: 40ch; }
 body.text-hidden .chat { display: none; }
+
+/* ---------- approval card ---------- */
+.approval { width: 100%; max-width: 380px; text-align: left; border: 2px solid var(--ai); border-radius: 14px; padding: 12px 14px; background: var(--surface); display: grid; gap: 6px; margin-top: 6px; }
+.approval p { margin: 0; }
+.approval-kind { font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--ai); }
+.approval-summary { font-weight: 600; }
+.approval-lines { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; display: grid; gap: 2px; font-variant-numeric: tabular-nums; }
+.approval-problems { font-size: 13px; color: var(--warn); }
+.approval-actions { display: flex; gap: 8px; margin-top: 2px; }
+.approval-state { font-size: 14px; font-weight: 600; }
+.approval-hint { font-size: 12px; color: var(--muted); }
+.approval.done { border-color: var(--line); }
 .form-msg { font-size: 13px; min-height: 1.3em; }
 .form-msg.bad { color: var(--warn); }
 .form-msg.good { color: var(--ok); }

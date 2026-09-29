@@ -158,6 +158,81 @@
     settingsPanel.hidden = true;
   });
 
+  // ---------- approval card ----------
+  let approvalId = null;
+
+  function showApproval(message) {
+    approvalId = message.id;
+    const card = $("approval");
+    card.classList.remove("done");
+    $("approval-kind").textContent = "Change needs your OK";
+    $("approval-summary").textContent = message.summary;
+    const list = $("approval-lines");
+    list.innerHTML = "";
+    (message.lines || []).forEach((line) => {
+      const li = document.createElement("li");
+      li.textContent = line;
+      list.appendChild(li);
+    });
+    const problems = message.problems || [];
+    $("approval-problems").textContent = problems.length ? "Can't do: " + problems.join("; ") : "";
+    $("approval-problems").hidden = !problems.length;
+    $("approval-actions").hidden = false;
+    $("approve-btn").disabled = false;
+    $("approve-btn").textContent = "Apply";
+    $("reject-btn").textContent = "Not now";
+    $("reject-btn").hidden = false;
+    $("approval-state").hidden = true;
+    $("approval-hint").hidden = false;
+    card.hidden = false;
+  }
+
+  function updateApproval(message) {
+    if (message.id && message.id !== approvalId && message.state !== "undone") return;
+    const card = $("approval");
+    const state = $("approval-state");
+    const setDone = (text, withUndo) => {
+      card.classList.add("done");
+      $("approval-kind").textContent = withUndo ? "Change applied" : "Change";
+      state.textContent = text;
+      state.hidden = false;
+      $("approval-hint").hidden = true;
+      $("approval-actions").hidden = !withUndo;
+      $("approve-btn").hidden = withUndo;
+      $("reject-btn").hidden = !withUndo;
+      $("reject-btn").textContent = "Undo";
+    };
+    if (message.state === "applying") {
+      $("approve-btn").disabled = true;
+      $("approve-btn").textContent = "Applying…";
+    } else if (message.state === "applied") {
+      setDone(message.failed ? `Applied, but ${message.failed} part(s) failed` : "Applied ✓", true);
+      approvalId = "undo";
+    } else if (message.state === "rejected" || message.state === "replaced" || message.state === "expired") {
+      card.hidden = true;
+      approvalId = null;
+    } else if (message.state === "failed") {
+      setDone("Couldn't apply it", false);
+    } else if (message.state === "undone") {
+      setDone("Put back ✓", false);
+      approvalId = null;
+      setTimeout(() => {
+        if (!approvalId) card.hidden = true;
+      }, 4000);
+    }
+  }
+
+  $("approve-btn").addEventListener("click", () => {
+    if (approvalId && approvalId !== "undo" && socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "approve", id: approvalId }));
+    }
+  });
+  $("reject-btn").addEventListener("click", () => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    if (approvalId === "undo") socket.send(JSON.stringify({ type: "undo" }));
+    else if (approvalId) socket.send(JSON.stringify({ type: "reject", id: approvalId }));
+  });
+
   // ---------- messages ----------
   function scrollDown() {
     chat.scrollTop = chat.scrollHeight;
@@ -270,6 +345,12 @@
         $("caption").dataset.who = "agent";
         break;
       }
+      case "approval":
+        showApproval(message);
+        break;
+      case "approval_update":
+        updateApproval(message);
+        break;
       case "error":
         addBubble("error", message.message);
         if (voice.isOn()) voice.say(message.message);

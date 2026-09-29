@@ -1,9 +1,12 @@
 // The agent: one conversation shared by every helper window.
 // Loop per question: OBSERVE (look at the screen when the question is about it)
 // → UNDERSTAND and DISCUSS (Gemini answers, and may call tools to look again).
-// Later steps add more tools (pointer, Figma, screenshots) and the approval gate here.
+// → SUGGEST → ASK FOR APPROVAL (the AI can only propose; see approvals.js)
+// → ACT (only after the user's yes) → VERIFY (it looks at the result and reports back).
 import { AiError, listChatModels, rankModels, streamChat } from "../ai/gemini.js";
+import { randomUUID } from "node:crypto";
 import { SYSTEM_PROMPT } from "./prompt.js";
+import { CHANGE_TOOL, classifyReply } from "./approvals.js";
 
 const MAX_HISTORY = 40; // messages kept for context (always an even number: question + answer)
 const MAX_MODELS_TO_TRY = 4; // when Google is busy, try up to this many models
@@ -62,7 +65,7 @@ export function createAgent({ broadcast, parts }) {
   async function* streamTurn(contents) {
     const tools = [];
     if (parts.connected("browser")) tools.push(WEB_TOOL);
-    if (parts.connected("figma")) tools.push(FIGMA_TOOL);
+    if (parts.connected("figma")) tools.push(FIGMA_TOOL, CHANGE_TOOL);
     let lastError;
     for (const model of await ensureModels()) {
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -131,15 +134,125 @@ export function createAgent({ broadcast, parts }) {
     return parts.activeSurface();
   }
 
+  // ---------- proposals and approval ----------
+  let pending = null; // { id, summary, changes, lines, problems } waiting for the user's yes
+  let lastApplied = null; // { token, summary } so "undo" can put it back
+
+  async function propose(args) {
+    if (!parts.connected("figma")) return { error: "Figma isn't connected, so nothing can be changed. Ask the user to run the Design Agent plugin in Figma." };
+    const changes = Array.isArray(args.changes) ? args.changes.slice(0, 20) : [];
+    if (!changes.length) return { error: "No changes were given." };
+    let preview;
+    try {
+      preview = await parts.call("figma", "figma.preview", { changes }, 15000);
+    } catch (error) {
+      return { error: `Couldn't check the changes in Figma: ${error.message}` };
+    }
+    if (!preview.lines.length) return { error: "None of these changes can be made: " + preview.problems.join("; ") };
+
+    if (pending) broadcast({ type: "approval_update", id: pending.id, state: "replaced" });
+    // Only the changes that passed the check will be applied.
+    const doable = changes.filter((c, i) => !preview.valid || preview.valid[i]);
+    pending = { id: randomUUID(), summary: String(args.summary || "Change the design"), changes: doable, lines: preview.lines, problems: preview.problems };
+    broadcast({ type: "approval", id: pending.id, summary: pending.summary, lines: pending.lines, problems: pending.problems });
+    console.log(`  Waiting for approval: ${pending.summary}`);
+    return {
+      status: "waiting_for_user_approval",
+      will_change: pending.lines,
+      cannot_change: pending.problems,
+      note: "Nothing has changed yet. Ask the user, in one short sentence, if you should apply it.",
+    };
+  }
+
   async function runTool(call) {
     if (call.name === "look_at_webpage" || call.name === "look_at_figma") {
       const [description, ...images] = call.name === "look_at_figma" ? await lookAtFigma() : await lookAtWebpage();
       return { response: { result: description.text }, extra: images };
     }
+    if (call.name === "propose_figma_changes") return { response: await propose(call.args || {}), extra: [] };
     return { response: { error: `Unknown tool ${call.name}` }, extra: [] };
   }
 
-  // ---------- one question ----------
+  /** Says something without asking the AI (used for approvals, "no" and "undo"). */
+  function sayDirect(userText, reply) {
+    if (userText) broadcast({ type: "message", role: "user", text: userText });
+    broadcast({ type: "agent_start" });
+    broadcast({ type: "agent_delta", text: reply });
+    broadcast({ type: "agent_done", text: reply });
+    history.push({ role: "user", parts: [{ text: userText || "(clicked)" }] }, { role: "model", parts: [{ text: reply }] });
+    history = history.slice(-MAX_HISTORY);
+  }
+
+  async function waitUntilFree() {
+    for (let i = 0; busy && i < 150; i++) await wait(100);
+    return !busy;
+  }
+
+  /** ACT, then VERIFY. Only reachable from the user's own click or clear "yes". */
+  async function approve(id, userText = null) {
+    if (!pending || pending.id !== id) {
+      broadcast({ type: "approval_update", id, state: "expired" });
+      return;
+    }
+    if (!(await waitUntilFree())) return;
+    const proposal = pending;
+    pending = null;
+    busy = true;
+    broadcast({ type: "approval_update", id, state: "applying" });
+    let result;
+    try {
+      result = await parts.call("figma", "figma.apply", { changes: proposal.changes }, 30000);
+    } catch (error) {
+      busy = false;
+      broadcast({ type: "approval_update", id, state: "failed" });
+      sayDirect(userText, `Sorry, I couldn't make the change in Figma: ${error.message}.`);
+      return;
+    }
+    busy = false;
+    const failed = result.results.filter((r) => !r.ok);
+    lastApplied = { token: result.token, summary: proposal.summary };
+    broadcast({ type: "approval_update", id, state: "applied", failed: failed.length });
+    console.log(`  Applied: ${proposal.summary}${failed.length ? ` (${failed.length} failed)` : ""}`);
+
+    // VERIFY: let the AI look at the result and report back briefly.
+    const report =
+      `[The user approved "${proposal.summary}", and it has now been applied in Figma.]\n` +
+      `Results: ${result.results.map((r) => `${r.change} ${r.id}: ${r.ok ? "done" : "FAILED (" + r.error + ")"}`).join("; ")}\n` +
+      `The changed layers now:\n${result.after}\n` +
+      "In one or two short sentences, confirm what changed (point at it) and whether it now looks right. " +
+      "If something failed, say what and why. Don't propose another change unless they ask.";
+    const extra = result.screenshot ? [{ inlineData: { mimeType: "image/jpeg", data: result.screenshot } }] : [];
+    await runTurn({ userText: userText, promptText: report, extraParts: extra, historyText: `${userText || "(clicked Apply)"} [approved: ${proposal.summary}]`, observe: false });
+  }
+
+  async function reject(id, userText = null) {
+    if (!pending || pending.id !== id) return;
+    if (!(await waitUntilFree())) return;
+    broadcast({ type: "approval_update", id, state: "rejected" });
+    console.log(`  Not applied: ${pending.summary}`);
+    pending = null;
+    sayDirect(userText, "Okay, I'll leave it as it is.");
+  }
+
+  async function undoLast(userText = null) {
+    if (!lastApplied) {
+      if (userText) sayDirect(userText, "There's nothing of mine to undo. In Figma you can always press Ctrl Z.");
+      return;
+    }
+    if (!(await waitUntilFree())) return;
+    const applied = lastApplied;
+    lastApplied = null;
+    try {
+      const result = await parts.call("figma", "figma.undo", { token: applied.token }, 20000);
+      broadcast({ type: "approval_update", state: "undone" });
+      const note = result.notes && result.notes.length ? ` One thing I couldn't reverse: ${result.notes[0]}.` : "";
+      sayDirect(userText, `Done, I put it back the way it was.${note}`);
+    } catch (error) {
+      sayDirect(userText, `I couldn't undo that: ${error.message}. Ctrl Z in Figma will do it.`);
+    }
+  }
+
+  // ---------- one turn of conversation ----------
 
   async function handleUserText(text) {
     text = String(text || "").trim();
@@ -148,21 +261,38 @@ export function createAgent({ broadcast, parts }) {
       broadcast({ type: "error", message: "Add your free Gemini key first (Settings → Change AI key)." });
       return;
     }
+
+    // Short answers to a waiting proposal are decided here, by code, not by the AI.
+    const answer = classifyReply(text);
+    if (pending && answer === "yes") return approve(pending.id, text);
+    if (pending && answer === "no") return reject(pending.id, text);
+    if (answer === "undo" && lastApplied && !pending) return undoLast(text);
+
     if (busy) {
       broadcast({ type: "error", message: "One moment, I'm still answering." });
       return;
     }
+    const note = pending
+      ? `\n[A proposed change is still waiting for the user's approval: "${pending.summary}". If they now want something different, propose the new version (it replaces the waiting one). Only the user can approve it.]`
+      : "";
+    await runTurn({ userText: text, promptText: text + note, historyText: text, observe: true });
+  }
 
+  /**
+   * One AI turn: OBSERVE (optional) → stream the answer, running any tools it asks for.
+   * userText: shown as your message (null = none). promptText: what the AI gets.
+   */
+  async function runTurn({ userText, promptText, extraParts = [], historyText, observe }) {
     busy = true;
-    broadcast({ type: "message", role: "user", text });
+    if (userText) broadcast({ type: "message", role: "user", text: userText });
     broadcast({ type: "agent_start" });
 
     let reply = "";
     const startedAt = Date.now();
     try {
       // OBSERVE: if the question is about the screen, look first.
-      const userParts = [{ text }];
-      const surface = ABOUT_SCREEN.test(text) ? surfaceFor(text) : null;
+      const userParts = [{ text: promptText }, ...extraParts];
+      const surface = observe && ABOUT_SCREEN.test(promptText) ? surfaceFor(promptText) : null;
       if (surface) {
         const [description, ...images] = surface === "figma" ? await lookAtFigma() : await lookAtWebpage();
         const where = surface === "figma" ? "their Figma design" : "the web page in Chrome";
@@ -170,7 +300,7 @@ export function createAgent({ broadcast, parts }) {
       }
       const contents = [...history, { role: "user", parts: userParts }];
 
-      // UNDERSTAND / DISCUSS: stream the answer; run any tools it asks for.
+      // UNDERSTAND / DISCUSS / SUGGEST: stream the answer; run any tools it asks for.
       for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
         const modelParts = [];
         const calls = [];
@@ -201,11 +331,12 @@ export function createAgent({ broadcast, parts }) {
       }
 
       if (!reply.trim()) {
-        reply = "Sorry, I didn't get an answer back. Could you say that again?";
+        reply = pending ? "Want me to apply that?" : "Sorry, I didn't get an answer back. Could you say that again?";
         broadcast({ type: "agent_delta", text: reply });
       }
       // Keep only the words in the history; screenshots are large and get old quickly.
-      history.push({ role: "user", parts: [{ text }] }, { role: "model", parts: [{ text: reply }] });
+      const proposalNote = pending ? ` [proposed, waiting for approval: ${pending.summary}]` : "";
+      history.push({ role: "user", parts: [{ text: historyText }] }, { role: "model", parts: [{ text: reply + proposalNote }] });
     } catch (error) {
       const message = error instanceof AiError ? error.message : "Something went wrong while answering. Try again.";
       if (!(error instanceof AiError)) console.error(error);
@@ -219,12 +350,18 @@ export function createAgent({ broadcast, parts }) {
 
   return {
     handleUserText,
+    approve: (id) => approve(id),
+    reject: (id) => reject(id),
+    undoLast: () => undoLast(),
+    /** Sent to a helper window when it opens, so a waiting card shows up there too. */
+    pendingApproval: () => (pending ? { id: pending.id, summary: pending.summary, lines: pending.lines, problems: pending.problems } : null),
     /** Look up the available models in the background, so the first answer is quick. */
     warmUp() {
       if (process.env.GEMINI_API_KEY) ensureModels().catch(() => {});
     },
     reset() {
       history = [];
+      pending = null;
       broadcast({ type: "history", messages: [] });
     },
     history: () =>
