@@ -74,8 +74,10 @@ export function createAgent({ broadcast }) {
     broadcast({ type: "agent_start" });
 
     let reply = "";
+    const startedAt = Date.now();
     try {
       for await (const piece of streamReply()) {
+        if (!reply) console.log(`  First words after ${((Date.now() - startedAt) / 1000).toFixed(1)} s (${models?.[0]})`);
         reply += piece;
         broadcast({ type: "agent_delta", text: piece });
       }
@@ -95,6 +97,10 @@ export function createAgent({ broadcast }) {
 
   return {
     handleUserText,
+    /** Look up the available models in the background, so the first answer is quick. */
+    warmUp() {
+      if (process.env.GEMINI_API_KEY) ensureModels().catch(() => {});
+    },
     reset() {
       history = [];
       broadcast({ type: "history", messages: [] });

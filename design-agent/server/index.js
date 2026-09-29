@@ -97,6 +97,7 @@ const server = http.createServer(async (req, res) => {
       const model = process.env.GEMINI_MODEL || pickModel(await listChatModels(clean));
       saveEnvValue(ENV_FILE, "GEMINI_API_KEY", clean);
       agent.forgetModel();
+      agent.warmUp();
       broadcastStatus();
       return json(res, 200, { ok: true, model });
     } catch (error) {
@@ -190,4 +191,5 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log("  Keep this window open while you work. Close it to stop Design Agent.\n");
   if (!process.env.GEMINI_API_KEY) console.log("  First time? The helper window will ask for your free Gemini key.\n");
   if (shouldOpen) openWindow(URL_BASE);
+  agent.warmUp();
 });

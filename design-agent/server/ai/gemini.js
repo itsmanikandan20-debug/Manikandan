@@ -101,16 +101,47 @@ export function pickModel(names) {
  * Streams a reply. Yields text pieces as they arrive.
  * messages: [{ role: "user" | "model", text }]
  */
+/**
+ * Newer Gemini models "think" before answering, which adds several seconds.
+ * For a quick spoken conversation we turn that off (or to the minimum).
+ * Different model generations accept different settings, so we try them in
+ * order and remember which one each model accepts.
+ */
+function thinkingChoices(model) {
+  const version = Number((model.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] || 0);
+  if (version >= 3) return [{ thinkingLevel: "minimal" }, { thinkingLevel: "low" }, { thinkingBudget: 0 }, null];
+  if (version >= 2.5) return [{ thinkingBudget: 0 }, null];
+  return [null];
+}
+const acceptedThinking = new Map(); // model -> index into thinkingChoices
+
+async function openStream({ key, model, system, messages, signal }) {
+  const choices = thinkingChoices(model);
+  for (let i = acceptedThinking.get(model) ?? 0; i < choices.length; i++) {
+    const generationConfig = { temperature: 0.8 };
+    if (choices[i]) generationConfig.thinkingConfig = choices[i];
+    try {
+      const response = await request(`/models/${model}:streamGenerateContent?alt=sse`, key, {
+        method: "POST",
+        signal,
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: system }] },
+          contents: messages.map((m) => ({ role: m.role, parts: [{ text: m.text }] })),
+          generationConfig,
+        }),
+      });
+      acceptedThinking.set(model, i);
+      return response;
+    } catch (error) {
+      // 400 = this model doesn't accept that thinking setting; try the next one.
+      if (!(error instanceof AiError) || error.status !== 400 || i === choices.length - 1) throw error;
+    }
+  }
+  throw new AiError("Google's AI service didn't accept the request. Try again in a moment.");
+}
+
 export async function* streamChat({ key, model, system, messages, signal }) {
-  const response = await request(`/models/${model}:streamGenerateContent?alt=sse`, key, {
-    method: "POST",
-    signal,
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: system }] },
-      contents: messages.map((m) => ({ role: m.role, parts: [{ text: m.text }] })),
-      generationConfig: { temperature: 0.7 },
-    }),
-  });
+  const response = await openStream({ key, model, system, messages, signal });
 
   const decoder = new TextDecoder();
   let buffer = "";

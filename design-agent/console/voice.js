@@ -126,7 +126,7 @@
         setState("hearing");
         onCaption(heard, "you");
         clearTimeout(sendTimer);
-        if (finalText.trim() && !interim) sendTimer = setTimeout(flush, 700);
+        if (finalText.trim() && !interim) sendTimer = setTimeout(flush, 450);
       };
 
       recognition.onerror = (event) => {
