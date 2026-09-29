@@ -8,24 +8,24 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700&family=Figtree:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="/style.css">
 </head>
-<body>
+<body class="text-hidden">
   <main class="helper">
     <header class="head">
       <div class="title-row">
         <div class="title"><i class="logo"></i>Design Agent</div>
         <div class="actions">
-          <button type="button" id="new-chat" class="icon-btn" title="Start a new conversation">New chat</button>
-          <button type="button" id="key-btn" class="icon-btn" title="Change your Gemini key">Key</button>
+          <button type="button" id="text-toggle" class="icon-btn" aria-pressed="false">Show text</button>
+          <button type="button" id="settings-btn" class="icon-btn" aria-expanded="false">Settings</button>
         </div>
       </div>
       <div class="status">
         <span id="st-ai" class="pill">AI</span>
-        <span id="st-browser" class="pill" title="Arrives in Step 2">Chrome</span>
-        <span id="st-figma" class="pill" title="Arrives in Step 5">Figma</span>
+        <span id="st-browser" class="pill" title="Coming in the next step">Chrome</span>
+        <span id="st-figma" class="pill" title="Coming soon">Figma</span>
       </div>
     </header>
 
-    <section id="setup" class="setup" hidden>
+    <section id="setup" class="panel" hidden>
       <h2>Add your free AI key</h2>
       <p>Design Agent uses Google Gemini, which is free. You only do this once.</p>
       <ol>
@@ -42,26 +42,55 @@
       <p class="small">Your key is saved only on this computer, in the <code>.env</code> file.</p>
     </section>
 
+    <section id="settings" class="panel" hidden>
+      <h2>Settings</h2>
+      <label for="set-lang">Your accent (helps it understand you)</label>
+      <select id="set-lang">
+        <option value="en-IN">English (India)</option>
+        <option value="en-US">English (US)</option>
+        <option value="en-GB">English (UK)</option>
+        <option value="en-AU">English (Australia)</option>
+      </select>
+      <label for="set-voice">Its voice</label>
+      <div class="row">
+        <select id="set-voice"></select>
+        <button type="button" id="test-voice" class="icon-btn">Test</button>
+      </div>
+      <label for="set-rate">Speaking speed: <span id="rate-value"></span></label>
+      <input id="set-rate" type="range" min="0.8" max="1.4" step="0.05">
+      <div class="row">
+        <button type="button" id="key-btn" class="icon-btn">Change AI key</button>
+        <button type="button" id="new-chat" class="icon-btn">Start a new conversation</button>
+      </div>
+    </section>
+
+    <section class="stage" aria-live="polite">
+      <button type="button" id="orb" class="orb" data-state="off" aria-label="Start talking">
+        <span class="orb-core">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+        </span>
+        <span class="ring"></span>
+      </button>
+      <p id="voice-state" class="voice-state">Tap to start talking</p>
+      <p id="caption" class="caption">Try saying: “How do I make a button stand out?”</p>
+      <p id="problem" class="problem" role="alert" hidden></p>
+    </section>
+
     <section id="chat" class="chat" aria-live="polite">
       <div id="empty" class="empty">
-        <p class="empty-title">Hi! I'm your design partner.</p>
-        <p>Ask me anything about UX or UI. For example:</p>
+        <p>Your conversation appears here as text.</p>
         <button type="button" class="suggest">How do I make a call-to-action button stand out?</button>
         <button type="button" class="suggest">What's a good spacing system for a landing page?</button>
-        <button type="button" class="suggest">Which fonts pair well for a portfolio?</button>
       </div>
     </section>
 
     <form id="composer" class="composer">
-      <button type="button" id="mic" class="mic" disabled title="Voice arrives in Step 3">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
-        <span class="sr">Voice (coming in Step 3)</span>
-      </button>
       <label for="text" class="sr">Message</label>
-      <textarea id="text" rows="1" placeholder="Type to your design partner…"></textarea>
+      <textarea id="text" rows="1" placeholder="Or type here…"></textarea>
       <button type="submit" id="send" class="primary">Send</button>
     </form>
   </main>
+  <script src="/voice.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

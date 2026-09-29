@@ -3,10 +3,20 @@
 An AI UX/UI design partner that sits beside you while you work. It runs on
 **your own computer**, and it's free.
 
-> **Where we are: Step 1 of 8.** You can **type** to your design partner and it
-> answers. Seeing Chrome (Step 2), voice (Step 3), the orange pointer (Step 4)
-> and Figma (Steps 5–8) come next. The full plan is in
-> [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+> **Where we are:** you can **talk** to your design partner and it **talks back**
+> (typing works too). Seeing Chrome, the orange pointer and Figma come next. The
+> full plan is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Talking to it
+
+1. Tap the big **orange circle** once. Chrome asks to use your microphone: click **Allow**.
+2. Just talk. When you pause, it answers out loud.
+3. Talk while it's speaking to interrupt it.
+4. Tap the circle again to stop listening.
+
+Tips: **headphones** work best, so it doesn't hear its own voice. In **Settings**
+you can pick your accent, its voice and its speed. **Show text** shows the
+conversation in writing.
 
 ---
 
