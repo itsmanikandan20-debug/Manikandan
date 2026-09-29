@@ -6,7 +6,7 @@
 const SERVER = "ws://localhost:3456/ws";
 // Raise this whenever background.js or manifest.json change, so the helper can ask
 // you to reload the add-on once (Chrome only picks up those two files on reload).
-const CORE_VERSION = 1;
+const CORE_VERSION = 2;
 let socket = null;
 let pingTimer = null;
 
@@ -73,9 +73,39 @@ async function currentTab() {
   return tab;
 }
 
-async function runTool(tool) {
+let lastReadTabId = null; // the tab we last described; element ids like w12 live there
+
+async function runTool(tool, args) {
   if (tool === "web.snapshot") return snapshot();
+  if (tool === "page.call") return pageCall(args);
   throw new Error(`unknown tool ${tool}`);
+}
+
+/**
+ * Runs a helper file inside the page, then calls one of its functions.
+ * Page features (like the pointer) live in their own files, so they can be
+ * updated without reloading the add-on. Example: { file: "pointer.js", method: "show", args: ["w12"] }
+ */
+async function pageCall({ file, method, args = [] }) {
+  if (!/^[\w-]+\.js$/.test(file || "") || !/^\w+$/.test(method || "")) throw new Error("bad page call");
+  let tabId = lastReadTabId;
+  try {
+    if (tabId === null) throw new Error();
+    await chrome.tabs.get(tabId);
+  } catch {
+    tabId = (await currentTab()).id;
+  }
+  await chrome.scripting.executeScript({ target: { tabId }, files: [file] });
+  const [injection] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (name, params) => {
+      const api = window.__designAgent;
+      if (!api || typeof api[name] !== "function") return { ok: false, reason: `missing ${name}` };
+      return api[name](...params);
+    },
+    args: [method, args],
+  });
+  return injection.result;
 }
 
 async function snapshot() {
@@ -96,6 +126,7 @@ async function snapshot() {
   try {
     const [injection] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["snapshot.js"] });
     page = injection.result;
+    lastReadTabId = tab.id;
   } catch (error) {
     if (/file:/.test(url)) {
       throw new Error("to read files on your computer, turn on \"Allow access to file URLs\" for Design Agent in chrome://extensions");

@@ -20,9 +20,14 @@
     return (text.toLowerCase().match(/[a-z0-9']+/g) || []);
   }
 
+  // The AI marks what it's talking about with silent markers like [[w12]] or [[w4-w5]].
+  const MARKER = /\[\[([^\]\s]{1,40})\]\]/g;
+  window.markerTargets = (text) => [...String(text).matchAll(MARKER)].map((m) => m[1]);
+  window.stripMarkers = (text) => String(text).replace(MARKER, "").replace(/ {2,}/g, " ").replace(/\[\[[^\]]*$/, "");
+
   /** Makes written text sound right when read aloud. */
   function speakable(text) {
-    return text
+    return window.stripMarkers(text)
       .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")   // [link](url) -> link
       .replace(/https?:\/\/\S+/g, "")             // don't read out web addresses
       .replace(/[*_`#>]+/g, "")                   // markdown symbols
@@ -31,7 +36,7 @@
       .trim();
   }
 
-  window.createVoice = function ({ onUserSaid, onState, onCaption, onProblem }) {
+  window.createVoice = function ({ onUserSaid, onState, onCaption, onProblem, onPoint = () => {} }) {
     const settings = loadSettings();
     const supported = Boolean(Recognition && window.speechSynthesis);
 
@@ -45,6 +50,7 @@
     let buffer = "";          // text waiting for the end of its sentence
     let muted = false;        // true after you interrupt, until the next answer
     let spokenWords = new Set();
+    let carryTargets = [];    // pointer targets waiting for the next spoken sentence
     let echoUntil = 0;        // ignore our own voice for a moment after speaking
     const utterances = [];    // keep references so Chrome doesn't drop them mid-sentence
 
@@ -156,8 +162,14 @@
 
     // ---------- speaking ----------
     function queueSentence(text) {
+      if (muted) return;
+      const targets = carryTargets.concat(window.markerTargets(text));
+      carryTargets = [];
       const clean = speakable(text);
-      if (!clean || muted) return;
+      if (!clean) {
+        carryTargets = targets; // a marker on its own: point when the next sentence starts
+        return;
+      }
       words(clean).forEach((w) => spokenWords.add(w));
 
       const utterance = new SpeechSynthesisUtterance(clean);
@@ -172,6 +184,7 @@
       }
       utterance.rate = Number(settings.rate) || 1;
       utterance.onstart = () => {
+        targets.forEach(onPoint); // move the pointer as this sentence starts
         speaking = true;
         setState("speaking");
         onCaption(clean, "agent");
@@ -262,6 +275,7 @@
       beginAnswer() {
         muted = false;
         buffer = "";
+        carryTargets = [];
         spokenWords = new Set();
         if (active) setState("thinking");
       },
@@ -282,6 +296,8 @@
       finishAnswer() {
         if (buffer.trim()) queueSentence(buffer);
         buffer = "";
+        if (carryTargets.length) carryTargets.forEach(onPoint);
+        carryTargets = [];
         if (active && pending === 0 && !speaking) setState("listening");
       },
 

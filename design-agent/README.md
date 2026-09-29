@@ -4,8 +4,8 @@ An AI UX/UI design partner that sits beside you while you work. It runs on
 **your own computer**, and it's free.
 
 > **Where we are:** you can **talk** to your design partner, it **talks back**,
-> and it can **see the website open in Chrome**. The orange pointer and Figma
-> come next. The full plan is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+> it can **see the website open in Chrome**, and it **points** at what it's
+> talking about with its own orange arrow. Figma comes next. The full plan is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Talking to it
 
@@ -24,6 +24,10 @@ Open any website in Chrome and say things like **"Review this page"**, **"What
 font are they using?"**, **"What's wrong with this section?"** or **"How can I
 improve this?"** It looks at the page (text, fonts, sizes, colours, spacing and a
 screenshot) and answers.
+
+While it talks, its **orange arrow** moves to the heading, button or gap it's
+talking about, in time with its voice. The arrow is separate from your mouse,
+never blocks your clicks, and disappears a few seconds after it finishes.
 
 This needs the **Chrome add-on**, installed once (below). When it's connected,
 the **Chrome** light in the helper window is green.

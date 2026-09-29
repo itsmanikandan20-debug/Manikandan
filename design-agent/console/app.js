@@ -11,6 +11,10 @@
 
   let socket = null;
   let current = null; // the agent bubble being streamed
+  let currentRaw = ""; // its text including silent pointer markers like [[w12]]
+  let pointedCount = 0; // markers already acted on (when voice is off)
+  let pointing = false;
+  let clearPointerTimer = null;
   let busy = false;
   let waitingToSend = null; // something you said while it was still answering
 
@@ -29,6 +33,7 @@
       else submit(said);
     },
     onState: (state) => {
+      if (state === "listening" || state === "off") clearPointerSoon(4000);
       orb.dataset.state = state;
       orb.setAttribute("aria-label", state === "off" ? "Start talking" : "Stop talking");
       $("voice-state").textContent = STATE_LABEL[state] || "";
@@ -39,7 +44,25 @@
       $("caption").dataset.who = who;
     },
     onProblem: showProblem,
+    onPoint: pointAt,
   });
+
+  // ---------- the orange pointer on the web page ----------
+  function pointAt(target) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    clearTimeout(clearPointerTimer);
+    pointing = true;
+    socket.send(JSON.stringify({ type: "point", target }));
+  }
+
+  function clearPointerSoon(ms) {
+    if (!pointing) return;
+    clearTimeout(clearPointerTimer);
+    clearPointerTimer = setTimeout(() => {
+      pointing = false;
+      if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "point_clear" }));
+    }, ms);
+  }
 
   function showProblem(message) {
     $("problem").textContent = message;
@@ -195,7 +218,7 @@
         break;
       case "history":
         clearChat();
-        message.messages.forEach((m) => addBubble(m.role, m.text));
+        message.messages.forEach((m) => addBubble(m.role, window.stripMarkers(m.text).trim()));
         break;
       case "message":
         addBubble(message.role, message.text);
@@ -203,22 +226,33 @@
       case "agent_start":
         setBusy(true);
         current = addBubble("agent thinking", "");
+        currentRaw = "";
+        pointedCount = 0;
+        clearTimeout(clearPointerTimer);
         voice.beginAnswer();
         if (!voice.isOn()) $("caption").textContent = "Thinking…";
         break;
       case "agent_delta":
         if (!current) current = addBubble("agent", "");
         current.classList.remove("thinking");
-        current.textContent += message.text;
+        currentRaw += message.text;
+        current.textContent = window.stripMarkers(currentRaw).trim();
         scrollDown();
         if (voice.isOn()) voice.speakPiece(message.text);
-        else $("caption").textContent = current.textContent;
+        else {
+          $("caption").textContent = current.textContent;
+          // Without voice, move the pointer as soon as each marker arrives.
+          const targets = window.markerTargets(currentRaw);
+          targets.slice(pointedCount).forEach(pointAt);
+          pointedCount = targets.length;
+        }
         break;
       case "agent_done":
         if (current && !current.textContent) current.remove();
         current = null;
         setBusy(false);
         if (voice.isOn()) voice.finishAnswer();
+        else clearPointerSoon(8000);
         if (waitingToSend) {
           const said = waitingToSend;
           waitingToSend = null;

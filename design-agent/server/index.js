@@ -225,6 +225,15 @@ wss.on("connection", (socket) => {
     if (role === "console") {
       if (message.type === "chat") agent.handleUserText(message.text);
       if (message.type === "reset") agent.reset();
+      // The helper window says when to move the pointer (in time with the voice).
+      if ((message.type === "point" || message.type === "point_clear") && parts.connected("browser")) {
+        const args = message.type === "point"
+          ? { file: "pointer.js", method: "show", args: [String(message.target || "")] }
+          : { file: "pointer.js", method: "hide", args: [] };
+        parts.call("browser", "page.call", args, 5000)
+          .then((result) => result && result.ok === false && console.log(`  Pointer: ${result.reason}`))
+          .catch(() => {});
+      }
     }
   });
 
