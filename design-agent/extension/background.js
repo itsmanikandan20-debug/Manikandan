@@ -7,7 +7,7 @@ const SERVER = "ws://localhost:3456/ws";
 const STATUS_URL = "http://localhost:3456/api/status";
 // Raise this whenever background.js or manifest.json change, so the helper can ask
 // you to reload the add-on once (Chrome only picks up those two files on reload).
-const CORE_VERSION = 4;
+const CORE_VERSION = 5;
 let socket = null;
 let pingTimer = null;
 let checking = false;
@@ -120,6 +120,7 @@ let lastReadTabId = null; // the tab we last described; element ids like w12 liv
 async function runTool(tool, args) {
   if (tool === "web.snapshot") return snapshot();
   if (tool === "page.call") return pageCall(args);
+  if (tool === "web.screenshot") return screenshot(args);
   throw new Error(`unknown tool ${tool}`);
 }
 
@@ -184,4 +185,83 @@ async function snapshot() {
     // The window may be minimised; the page description still works without a picture.
   }
   return { ...page, screenshot };
+}
+
+// ---------- screenshots ----------
+const MAX_SLICE = 4096; // Figma accepts images up to 4096 px on each side
+const MAX_PAGE_HEIGHT = 16000; // CSS px, for very long pages
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function inPage(tabId, method, args = []) {
+  await chrome.scripting.executeScript({ target: { tabId }, files: ["capture.js"] });
+  const [injection] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (name, params) => window.__designAgent[name](...params),
+    args: [method, args],
+  });
+  return injection.result;
+}
+
+function toBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+async function bitmapOf(dataUrl) {
+  return createImageBitmap(await (await fetch(dataUrl)).blob());
+}
+
+/** Takes a screenshot of the visible part, or of the whole page (scrolling and stitching). */
+async function screenshot({ fullPage = false } = {}) {
+  const tab = await currentTab();
+  if (!/^(https?|file):/i.test(tab.url || "")) throw new Error("Chrome doesn't let add-ons capture its own pages. Open a normal website.");
+  const info = await inPage(tab.id, "captureStart");
+  const shots = [];
+  try {
+    const cssHeight = fullPage ? Math.min(info.pageHeight, MAX_PAGE_HEIGHT) : info.height;
+    const positions = [];
+    if (fullPage) {
+      for (let y = 0; y < cssHeight; y += info.height) positions.push(Math.min(y, Math.max(cssHeight - info.height, 0)));
+    } else {
+      positions.push(null); // just what's on screen
+    }
+    let lastCapture = 0;
+    for (let i = 0; i < positions.length; i++) {
+      let y = null;
+      if (positions[i] !== null) {
+        y = await inPage(tab.id, "captureScrollTo", [positions[i], i > 0]);
+        await wait(300); // let lazy images and animations settle
+      }
+      const since = Date.now() - lastCapture;
+      if (since < 600) await wait(600 - since); // Chrome allows about 2 captures per second
+      await wait(80); // make sure the hidden pointer has repainted
+      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+      lastCapture = Date.now();
+      shots.push({ y: y === null ? 0 : y, dataUrl });
+    }
+
+    // Stitch the shots into one tall picture, then cut it into slices Figma accepts.
+    const first = await bitmapOf(shots[0].dataUrl);
+    const scale = first.width / info.width; // device pixels per CSS pixel
+    const width = first.width;
+    const height = Math.round(cssHeight * scale);
+    const canvas = new OffscreenCanvas(width, height);
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(first, 0, Math.round(shots[0].y * scale));
+    for (const shot of shots.slice(1)) ctx.drawImage(await bitmapOf(shot.dataUrl), 0, Math.round(shot.y * scale));
+
+    const chunks = [];
+    for (let top = 0; top < height; top += MAX_SLICE) {
+      const sliceHeight = Math.min(MAX_SLICE, height - top);
+      const slice = new OffscreenCanvas(Math.min(width, MAX_SLICE), sliceHeight);
+      slice.getContext("2d").drawImage(canvas, 0, top, slice.width, sliceHeight, 0, 0, slice.width, sliceHeight);
+      const blob = await slice.convertToBlob({ type: "image/png" });
+      chunks.push({ base64: toBase64(await blob.arrayBuffer()), width: slice.width, height: sliceHeight });
+    }
+    return { url: info.url, title: info.title, fullPage, cssWidth: Math.round(Math.min(width, MAX_SLICE) / scale), cssHeight, chunks };
+  } finally {
+    await inPage(tab.id, "captureEnd").catch(() => {});
+  }
 }

@@ -12,6 +12,7 @@ import { loadEnv, saveEnvValue } from "./env.js";
 import { createAgent } from "./agent/agent.js";
 import { AiError, listChatModels, pickModel } from "./ai/gemini.js";
 import { openWindow } from "./open-window.js";
+import { createCaptures } from "./captures.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ENV_FILE = path.join(ROOT, ".env");
@@ -115,7 +116,8 @@ function expectedExtensionCore() {
 }
 let extensionNeedsReload = false;
 
-const agent = createAgent({ broadcast, parts });
+const captures = createCaptures(ROOT);
+const agent = createAgent({ broadcast, parts, captures });
 
 // ---------- web server ----------
 const TYPES = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png" };
@@ -181,6 +183,19 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       const message = error instanceof AiError ? error.message : "Couldn't check the key. Try again.";
       return json(res, 400, { ok: false, error: message });
+    }
+  }
+
+  // Saved screenshots (for thumbnails in the helper window).
+  if (url.pathname.startsWith("/captures/")) {
+    const name = path.basename(url.pathname);
+    if (!/^cap\d+-\d+\.png$/.test(name)) return json(res, 404, { ok: false });
+    try {
+      const image = await readFile(path.join(captures.dir, name));
+      res.writeHead(200, { "content-type": "image/png" });
+      return res.end(image);
+    } catch {
+      return json(res, 404, { ok: false });
     }
   }
 

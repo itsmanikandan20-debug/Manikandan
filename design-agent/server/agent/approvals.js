@@ -9,7 +9,8 @@ export const CHANGE_TOOL = {
   description:
     "Propose changes to the user's Figma design. NOTHING changes when you call this: the user sees an approval card " +
     "and must approve first. After calling it, ask them briefly if they want you to apply it. " +
-    "Use layer ids from the most recent Figma layer list. Positions (x, y) are relative to the same root frame as in that list.",
+    "Use layer ids from the most recent Figma layer list. Positions (x, y) are relative to the same root frame as in that list. " +
+    "To put a saved screenshot into Figma use place_screenshot; to move a layer (like a screenshot) beside another use place_next_to.",
   parameters: {
     type: "object",
     properties: {
@@ -28,6 +29,7 @@ export const CHANGE_TOOL = {
               enum: [
                 "set_text", "set_font_size", "set_font", "set_line_height", "set_fill", "set_spacing",
                 "move_by", "move_to", "resize", "set_radius", "rename", "duplicate", "group", "create_component",
+                "place_screenshot", "place_next_to",
               ],
             },
             id: { type: "string", description: "Layer id, like 12:34" },
@@ -52,6 +54,11 @@ export const CHANGE_TOOL = {
             height: { type: "number" },
             radius: { type: "number" },
             name: { type: "string", description: "New layer name (rename, group)" },
+            capture_id: { type: "string", description: 'Screenshot to add (place_screenshot): an id like cap3, or "latest"' },
+            near_id: { type: "string", description: "place_screenshot: put it beside this layer's top frame (default: the selection or the frame in view)" },
+            target_id: { type: "string", description: "place_next_to: the layer to put it beside" },
+            side: { type: "string", enum: ["right", "left", "below", "above"], description: "Which side (default right)" },
+            gap: { type: "number", description: "Space between them in px (default 100)" },
           },
           required: ["action"],
         },

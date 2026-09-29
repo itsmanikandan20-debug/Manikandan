@@ -431,7 +431,24 @@ async function need(id) {
   return node;
 }
 
+/** Where a new or moved layer should go: next to "near" (a layer id), else next to what's selected/in view. */
+async function anchorFor(c) {
+  if (c.near_id) return topFrame(await need(c.near_id));
+  const selection = figma.currentPage.selection.filter((n) => !isPointer(n));
+  if (selection.length) return topFrame(selection[0]);
+  const { roots } = currentRoots();
+  return roots.length ? topFrame(roots[0]) : null;
+}
+const SIDES = ["right", "left", "below", "above"];
+
 async function describeChange(c) {
+  if (c.action === "place_screenshot") {
+    if (!c.capture) throw new Error("that screenshot wasn't found");
+    const anchor = await anchorFor(c);
+    const side = SIDES.includes(c.side) ? c.side : "right";
+    const where = anchor ? `${side === "right" ? "to the right of" : side === "left" ? "to the left of" : side === "below" ? "below" : "above"} "${anchor.name}"` : "in the middle of your view";
+    return `Add "${c.capture.name}" (${round(c.capture.css_width)}×${round(c.capture.css_height)}) ${where}`;
+  }
   const node = c.action === "group" ? null : await need(c.id);
   switch (c.action) {
     case "set_text":
@@ -491,6 +508,12 @@ async function describeChange(c) {
       return `${nameOf(node)} corner radius: ${node.cornerRadius === figma.mixed ? "mixed" : round(node.cornerRadius)} → ${round(c.radius)}`;
     case "rename":
       return `Rename ${nameOf(node)} → "${c.name}"`;
+    case "place_next_to": {
+      if (inAutoLayout(node)) throw new Error("it's inside an auto-layout frame, so its position comes from the layout");
+      const target = await need(c.target_id);
+      const side = SIDES.includes(c.side) ? c.side : "right";
+      return `Move ${nameOf(node)} ${side === "right" ? "to the right of" : side === "left" ? "to the left of" : side} ${nameOf(target)}`;
+    }
     case "duplicate":
       return `Duplicate ${nameOf(node)}`;
     case "create_component":
@@ -538,6 +561,11 @@ async function applyOne(c, record) {
     if (c.name) group.name = c.name;
     record.push({ kind: "ungroup", id: group.id });
     return group;
+  }
+  if (c.action === "place_screenshot") {
+    const frame = await placeScreenshot(c);
+    record.push({ kind: "remove", id: frame.id });
+    return frame;
   }
   const node = await need(c.id);
   if (c.action === "duplicate") {
@@ -615,6 +643,14 @@ async function applyOne(c, record) {
     case "rename":
       node.name = String(c.name);
       break;
+    case "place_next_to": {
+      const target = await need(c.target_id);
+      const spot = spotNextTo(topFrameBox(target, c.target_id), node.absoluteBoundingBox, c.side, c.gap);
+      const abs = node.absoluteBoundingBox;
+      node.x += spot.x - abs.x;
+      node.y += spot.y - abs.y;
+      break;
+    }
     default:
       throw new Error(`unknown change "${c.action}"`);
   }
@@ -630,7 +666,8 @@ async function apply(changes) {
     try {
       const node = await applyOne(c, record);
       if (node) touched.push(node);
-      results.push({ ok: true, change: c.action, id: c.id || (c.ids || []).join(",") });
+      const created = ["place_screenshot", "duplicate", "group"].includes(c.action) && node ? node.id : undefined;
+      results.push({ ok: true, change: c.action, id: c.id || (c.ids || []).join(",") || c.capture_id, created, capture_id: c.capture_id });
     } catch (error) {
       results.push({ ok: false, change: c.action, id: c.id || (c.ids || []).join(","), error: error.message });
     }
@@ -658,7 +695,55 @@ async function apply(changes) {
     }
   }
   if (touched[0] && !touched[0].removed) figma.currentPage.selection = [touched[0]];
-  return { results, token, after: lines.join("\n"), screenshot };
+  return { results, token, after: lines.join("\n"), screenshot, file: figma.root.name };
+}
+
+/** Top-left corner for something of size "box" placed beside "anchor" (both absolute). */
+function spotNextTo(anchor, box, side, gap) {
+  const space = gap !== undefined ? Number(gap) : 100;
+  if (side === "left") return { x: anchor.x - box.width - space, y: anchor.y };
+  if (side === "below") return { x: anchor.x, y: anchor.y + anchor.height + space };
+  if (side === "above") return { x: anchor.x, y: anchor.y - box.height - space };
+  return { x: anchor.x + anchor.width + space, y: anchor.y };
+}
+function topFrameBox(node) {
+  return node.absoluteBoundingBox;
+}
+
+/** Adds a screenshot as a frame of stacked image slices (Figma images max out at 4096 px). */
+async function placeScreenshot(c) {
+  const slices = c.images || [];
+  if (!slices.length) throw new Error("the screenshot's image data is missing");
+  const width = Number(c.capture.css_width);
+  const scale = width / slices[0].width;
+  const anchor = await anchorFor(c); // decide where it goes before adding anything
+  const frame = figma.createFrame();
+  frame.name = c.capture.name;
+  frame.fills = [];
+  frame.clipsContent = true;
+  let y = 0;
+  for (const slice of slices) {
+    const image = figma.createImage(figma.base64Decode(slice.base64));
+    const rect = figma.createRectangle();
+    rect.name = slices.length > 1 ? `Part ${frame.children.length + 1}` : "Screenshot";
+    rect.resize(width, slice.height * scale);
+    rect.fills = [{ type: "IMAGE", imageHash: image.hash, scaleMode: "FILL" }];
+    frame.appendChild(rect);
+    rect.x = 0;
+    rect.y = y;
+    y += slice.height * scale;
+  }
+  frame.resize(width, y);
+  frame.setPluginData("designAgentCapture", String(c.capture_id || ""));
+
+  const box = { x: 0, y: 0, width, height: y };
+  const spot = anchor
+    ? spotNextTo(anchor.absoluteBoundingBox, box, SIDES.includes(c.side) ? c.side : "right", c.gap)
+    : { x: figma.viewport.center.x - width / 2, y: figma.viewport.center.y - Math.min(y, 800) / 2 };
+  frame.x = spot.x;
+  frame.y = spot.y;
+  figma.viewport.scrollAndZoomIntoView([frame]);
+  return frame;
 }
 
 function topFrame(node) {

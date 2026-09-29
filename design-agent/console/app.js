@@ -345,6 +345,15 @@
         $("caption").dataset.who = "agent";
         break;
       }
+      case "capturing":
+        $("caption").textContent = message.fullPage ? "Taking a full-page screenshot (scrolling the page)…" : "Taking a screenshot…";
+        $("caption").dataset.who = "agent";
+        break;
+      case "captured":
+        $("shot-img").src = message.thumb;
+        $("shot-name").textContent = message.name;
+        $("shot").hidden = false;
+        break;
       case "approval":
         showApproval(message);
         break;

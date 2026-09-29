@@ -6,7 +6,8 @@ An AI UX/UI design partner that sits beside you while you work. It runs on
 > **Where we are:** you can **talk** to your design partner, it **talks back**,
 > it can **see the website open in Chrome** and **your design in Figma**, and it
 > **points** at what it's talking about with its own orange arrow, and it can
-> **change your Figma design after you say yes**. Screenshots into Figma come next. The full plan is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+> **change your Figma design after you say yes**. It also takes **screenshots**
+> of websites and puts them into Figma. Finding and moving screenshots comes next. The full plan is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Talking to it
 
@@ -31,6 +32,18 @@ talking about, in time with its voice. The arrow is separate from your mouse,
 never blocks your clicks, and disappears a few seconds after it finishes.
 
 This needs the **Chrome add-on**, installed once (below).
+
+## Screenshots
+
+- Say **"Take a screenshot of this page"** for what's on screen, or **"Take a
+  full-page screenshot"** for the whole page (it scrolls and stitches; very long
+  pages stop at 16,000 px). Its orange pointer and the page's scrollbar are left
+  out, and sticky headers appear only once.
+- Screenshots are saved on your computer in **design-agent\data\captures**.
+- Say **"Put it in my Figma file"**. The approval card shows where it goes (to
+  the right of your selected or visible frame, unless you say where). After your
+  **yes** it's added as a frame named "Screenshot – site – date". Long pages are
+  split into stacked parts because Figma images max out at 4,096 px.
 
 ## Asking about your Figma design
 

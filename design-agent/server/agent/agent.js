@@ -44,7 +44,21 @@ const FIGMA_TOOL = {
     "Use it whenever the user asks about their Figma design and you don't have a fresh view of it.",
 };
 
-export function createAgent({ broadcast, parts }) {
+const SCREENSHOT_TOOL = {
+  name: "take_screenshot",
+  description:
+    "Take a screenshot of the web page open in the user's Chrome and save it in their screenshot library on this computer. " +
+    "Set full_page to true when they ask for the whole page (it scrolls and stitches), otherwise it captures what's visible. " +
+    "Doesn't change anything, so no approval is needed.",
+  parameters: { type: "object", properties: { full_page: { type: "boolean" } } },
+};
+
+const LIST_SCREENSHOTS_TOOL = {
+  name: "list_screenshots",
+  description: "List the screenshots saved in the user's library (newest first): id, name, page address, when, and where each was put in Figma.",
+};
+
+export function createAgent({ broadcast, parts, captures }) {
   /** Conversation in Gemini's format: [{ role: "user" | "model", parts: [{ text }] }] */
   let history = [];
   let models = null; // best first; the one that last worked is moved to the front
@@ -64,7 +78,8 @@ export function createAgent({ broadcast, parts }) {
    */
   async function* streamTurn(contents) {
     const tools = [];
-    if (parts.connected("browser")) tools.push(WEB_TOOL);
+    if (parts.connected("browser")) tools.push(WEB_TOOL, SCREENSHOT_TOOL);
+    tools.push(LIST_SCREENSHOTS_TOOL);
     if (parts.connected("figma")) tools.push(FIGMA_TOOL, CHANGE_TOOL);
     let lastError;
     for (const model of await ensureModels()) {
@@ -142,6 +157,14 @@ export function createAgent({ broadcast, parts }) {
     if (!parts.connected("figma")) return { error: "Figma isn't connected, so nothing can be changed. Ask the user to run the Design Agent plugin in Figma." };
     const changes = Array.isArray(args.changes) ? args.changes.slice(0, 20) : [];
     if (!changes.length) return { error: "No changes were given." };
+    // Screenshots: attach their details (the image itself is added only when approved).
+    for (const c of changes) {
+      if (c.action !== "place_screenshot") continue;
+      const entry = captures.get(c.capture_id || "latest");
+      if (!entry) return { error: "There's no saved screenshot yet. Take one first (take_screenshot)." };
+      c.capture_id = entry.id;
+      c.capture = { name: entry.name, css_width: entry.cssWidth, css_height: entry.cssHeight };
+    }
     let preview;
     try {
       preview = await parts.call("figma", "figma.preview", { changes }, 15000);
@@ -170,7 +193,29 @@ export function createAgent({ broadcast, parts }) {
       return { response: { result: description.text }, extra: images };
     }
     if (call.name === "propose_figma_changes") return { response: await propose(call.args || {}), extra: [] };
+    if (call.name === "take_screenshot") return { response: await takeScreenshot(Boolean((call.args || {}).full_page)), extra: [] };
+    if (call.name === "list_screenshots") {
+      const list = captures.list().slice(0, 20).map((c) => ({
+        id: c.id, name: c.name, page: c.url, taken: c.createdAt,
+        in_figma: c.placedInFigma.map((p) => `layer ${p.nodeId} in "${p.file}"`),
+      }));
+      return { response: { screenshots: list, total: captures.list().length }, extra: [] };
+    }
     return { response: { error: `Unknown tool ${call.name}` }, extra: [] };
+  }
+
+  async function takeScreenshot(fullPage) {
+    if (!parts.connected("browser")) return { error: "The Chrome add-on isn't connected." };
+    broadcast({ type: "capturing", fullPage });
+    try {
+      const shot = await parts.call("browser", "web.screenshot", { fullPage }, 90000);
+      const entry = captures.add(shot);
+      broadcast({ type: "captured", id: entry.id, name: entry.name, thumb: `/captures/${entry.files[0].file}` });
+      console.log(`  Saved ${entry.name} (${entry.cssWidth}x${entry.cssHeight}, ${entry.files.length} part${entry.files.length > 1 ? "s" : ""})`);
+      return { saved: true, capture_id: entry.id, name: entry.name, size: `${entry.cssWidth}x${entry.cssHeight}`, page: entry.url };
+    } catch (error) {
+      return { error: `Couldn't take the screenshot: ${error.message}` };
+    }
   }
 
   /** Says something without asking the AI (used for approvals, "no" and "undo"). */
@@ -201,7 +246,13 @@ export function createAgent({ broadcast, parts }) {
     broadcast({ type: "approval_update", id, state: "applying" });
     let result;
     try {
-      result = await parts.call("figma", "figma.apply", { changes: proposal.changes }, 30000);
+      // Add the screenshot images now that it's approved.
+      const changes = proposal.changes.map((c) => {
+        if (c.action !== "place_screenshot") return c;
+        const entry = captures.get(c.capture_id);
+        return entry ? { ...c, images: captures.load(entry) } : c;
+      });
+      result = await parts.call("figma", "figma.apply", { changes }, 60000);
     } catch (error) {
       busy = false;
       broadcast({ type: "approval_update", id, state: "failed" });
@@ -210,6 +261,7 @@ export function createAgent({ broadcast, parts }) {
     }
     busy = false;
     const failed = result.results.filter((r) => !r.ok);
+    for (const r of result.results) if (r.ok && r.capture_id && r.created) captures.markPlaced(r.capture_id, r.created, result.file || "");
     lastApplied = { token: result.token, summary: proposal.summary };
     broadcast({ type: "approval_update", id, state: "applied", failed: failed.length });
     console.log(`  Applied: ${proposal.summary}${failed.length ? ` (${failed.length} failed)` : ""}`);
@@ -292,7 +344,9 @@ export function createAgent({ broadcast, parts }) {
     try {
       // OBSERVE: if the question is about the screen, look first.
       const userParts = [{ text: promptText }, ...extraParts];
-      const surface = observe && ABOUT_SCREEN.test(promptText) ? surfaceFor(promptText) : null;
+      // Just "take a screenshot" doesn't need a look first (it's quicker without).
+      const onlyCapture = /\b(take|grab|capture|get|make)\b[^.?]*\bscreen ?shot\b/i.test(promptText) && !/\?/.test(promptText);
+      const surface = observe && !onlyCapture && ABOUT_SCREEN.test(promptText) ? surfaceFor(promptText) : null;
       if (surface) {
         const [description, ...images] = surface === "figma" ? await lookAtFigma() : await lookAtWebpage();
         const where = surface === "figma" ? "their Figma design" : "the web page in Chrome";
