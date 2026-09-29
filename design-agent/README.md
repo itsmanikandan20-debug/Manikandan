@@ -3,9 +3,9 @@
 An AI UX/UI design partner that sits beside you while you work. It runs on
 **your own computer**, and it's free.
 
-> **Where we are:** you can **talk** to your design partner and it **talks back**
-> (typing works too). Seeing Chrome, the orange pointer and Figma come next. The
-> full plan is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+> **Where we are:** you can **talk** to your design partner, it **talks back**,
+> and it can **see the website open in Chrome**. The orange pointer and Figma
+> come next. The full plan is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Talking to it
 
@@ -17,6 +17,16 @@ An AI UX/UI design partner that sits beside you while you work. It runs on
 Tips: **headphones** work best, so it doesn't hear its own voice. In **Settings**
 you can pick your accent, its voice and its speed. **Show text** shows the
 conversation in writing.
+
+## Asking about a website
+
+Open any website in Chrome and say things like **"Review this page"**, **"What
+font are they using?"**, **"What's wrong with this section?"** or **"How can I
+improve this?"** It looks at the page (text, fonts, sizes, colours, spacing and a
+screenshot) and answers.
+
+This needs the **Chrome add-on**, installed once (below). When it's connected,
+the **Chrome** light in the helper window is green.
 
 ---
 
@@ -61,6 +71,24 @@ Type: **How do I make a call-to-action button stand out?** and press **Enter**.
 
 Then ask **"Why?"** It remembers the conversation.
 
+### 5. Install the Chrome add-on (once, about 2 minutes)
+
+1. In Chrome, type **chrome://extensions** in the address bar and press **Enter**.
+2. Turn on **Developer mode** (switch at the top right).
+3. Click **Load unpacked** (top left).
+4. Go to your **design-agent** folder, click the **extension** folder inside it
+   once, then click **Select Folder**.
+5. **Design Agent** appears in the list. Done. The **Chrome** light in the helper
+   window turns green within a few seconds.
+
+Chrome says the add-on can "read and change all your data on all websites". It
+needs that to look at whichever page you ask about. It only reads a page when you
+ask a question about it, and it sends it only to Design Agent on your computer
+(and from there to Gemini to get the answer).
+
+Don't move or delete the design-agent folder afterwards: Chrome runs the add-on
+from there.
+
 ---
 
 ## Every day after that
@@ -87,10 +115,13 @@ and double-click **Start Design Agent** again.
 | What you see | What to do |
 |---|---|
 | "Node.js is not installed" | Install the **LTS** version from https://nodejs.org, then try again. |
-| "That Gemini key doesn't work" | Copy the key again from aistudio.google.com/apikey. Click **Key** at the top of the helper window to paste it. |
+| "That Gemini key doesn't work" | Copy the key again from aistudio.google.com/apikey. In the helper window, open **Settings → Change AI key** and paste it. |
 | "The free Gemini limit was reached" | Wait a minute. The free plan allows a limited number of messages per minute and per day. |
 | The helper window says **Not running** | The black window was closed. Double-click **Start Design Agent** again. |
-| The helper window didn't open | Open Chrome and go to **http://localhost:3456** |
+| The helper window didn't open | Open Edge or Chrome and go to **http://localhost:3456** |
+| The **Chrome** light stays grey | Check the add-on is on in **chrome://extensions**. Then close and reopen Chrome. |
+| "The Chrome add-on has an update" | Open **chrome://extensions** and click the reload arrow ↻ on Design Agent. |
+| "Couldn't look at the page" | Chrome doesn't let add-ons read its own pages (chrome://…) or the Chrome Web Store. Open a normal website. |
 
 Still stuck? Take a screenshot of the black window and the helper window and send it to me.
 

@@ -98,10 +98,6 @@ export function pickModel(names) {
 }
 
 /**
- * Streams a reply. Yields text pieces as they arrive.
- * messages: [{ role: "user" | "model", text }]
- */
-/**
  * Newer Gemini models "think" before answering, which adds several seconds.
  * For a quick spoken conversation we turn that off (or to the minimum).
  * Different model generations accept different settings, so we try them in
@@ -115,20 +111,18 @@ function thinkingChoices(model) {
 }
 const acceptedThinking = new Map(); // model -> index into thinkingChoices
 
-async function openStream({ key, model, system, messages, signal }) {
+async function openStream({ key, model, system, contents, tools, signal }) {
   const choices = thinkingChoices(model);
   for (let i = acceptedThinking.get(model) ?? 0; i < choices.length; i++) {
     const generationConfig = { temperature: 0.8 };
     if (choices[i]) generationConfig.thinkingConfig = choices[i];
+    const body = { systemInstruction: { parts: [{ text: system }] }, contents, generationConfig };
+    if (tools && tools.length) body.tools = [{ functionDeclarations: tools }];
     try {
       const response = await request(`/models/${model}:streamGenerateContent?alt=sse`, key, {
         method: "POST",
         signal,
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: system }] },
-          contents: messages.map((m) => ({ role: m.role, parts: [{ text: m.text }] })),
-          generationConfig,
-        }),
+        body: JSON.stringify(body),
       });
       acceptedThinking.set(model, i);
       return response;
@@ -140,8 +134,16 @@ async function openStream({ key, model, system, messages, signal }) {
   throw new AiError("Google's AI service didn't accept the request. Try again in a moment.");
 }
 
-export async function* streamChat({ key, model, system, messages, signal }) {
-  const response = await openStream({ key, model, system, messages, signal });
+/**
+ * Streams one model turn.
+ * contents: Gemini "contents" ([{ role: "user" | "model", parts: [...] }]).
+ * tools: function declarations the model may call.
+ * Yields { part, text } for words to show/speak, { part, call: { name, args } }
+ * when the model wants to use a tool, and { part } for anything else (such as
+ * hidden signatures that must be sent back unchanged).
+ */
+export async function* streamChat({ key, model, system, contents, tools, signal }) {
+  const response = await openStream({ key, model, system, contents, tools, signal });
 
   const decoder = new TextDecoder();
   let buffer = "";
@@ -159,7 +161,11 @@ export async function* streamChat({ key, model, system, messages, signal }) {
         continue;
       }
       const parts = data.candidates?.[0]?.content?.parts || [];
-      for (const part of parts) if (part.text && !part.thought) yield part.text;
+      for (const part of parts) {
+        if (part.functionCall) yield { part, call: { name: part.functionCall.name, args: part.functionCall.args || {} } };
+        else if (part.text && !part.thought) yield { part, text: part.text };
+        else yield { part };
+      }
     }
   }
 }

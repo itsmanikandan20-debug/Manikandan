@@ -166,7 +166,12 @@
     $("st-ai").classList.toggle("on", status.hasKey);
     $("st-ai").textContent = status.hasKey ? "AI ready" : "AI: needs key";
     $("st-ai").title = status.model ? "Model: " + status.model : "";
-    $("st-browser").classList.toggle("on", Boolean(status.connections && status.connections.browser));
+    const chromeOn = Boolean(status.connections && status.connections.browser);
+    $("st-browser").classList.toggle("on", chromeOn);
+    if (status.connections && status.connections.browserNeedsReload) {
+      showProblem("The Chrome add-on has an update. In Chrome, open chrome://extensions and click the reload arrow ↻ on Design Agent.");
+    }
+    $("st-browser").title = chromeOn ? "Chrome add-on connected: ask about the page you're looking at" : "Chrome add-on not connected (see the setup guide)";
     $("st-figma").classList.toggle("on", Boolean(status.connections && status.connections.figma));
   }
 
@@ -221,6 +226,14 @@
           submit(said);
         }
         break;
+      case "looking": {
+        const phrases = ["Let me take a look.", "Okay, let me look.", "One sec, looking at it.", "Let me see."];
+        const phrase = phrases[Math.floor(Math.random() * phrases.length)];
+        if (voice.isOn()) voice.say(phrase);
+        $("caption").textContent = "Looking at the page…";
+        $("caption").dataset.who = "agent";
+        break;
+      }
       case "error":
         addBubble("error", message.message);
         if (voice.isOn()) voice.say(message.message);

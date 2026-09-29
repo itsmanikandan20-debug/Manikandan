@@ -2,6 +2,8 @@
 // It serves the helper window, and every part (helper window, Chrome add-on,
 // Figma plugin) connects to it over a WebSocket at ws://localhost:PORT/ws.
 import http from "node:http";
+import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +16,7 @@ import { openWindow } from "./open-window.js";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ENV_FILE = path.join(ROOT, ".env");
 const CONSOLE_DIR = path.join(ROOT, "console");
+const EXTENSION_DIR = path.join(ROOT, "extension");
 
 loadEnv(ENV_FILE);
 const PORT = Number(process.env.PORT) || 3456;
@@ -31,13 +34,62 @@ function broadcast(message, role = "console") {
   for (const socket of clients[role]) send(socket, message);
 }
 function connections() {
-  return { browser: clients.browser.size > 0, figma: clients.figma.size > 0 };
+  return {
+    browser: clients.browser.size > 0,
+    figma: clients.figma.size > 0,
+    browserNeedsReload: clients.browser.size > 0 && extensionNeedsReload,
+  };
 }
 function broadcastStatus() {
   broadcast({ type: "status", ...agent.status(), connections: connections() });
 }
 
-const agent = createAgent({ broadcast });
+// ---------- asking the Chrome add-on / Figma plugin to do something ----------
+const pendingCalls = new Map(); // id -> { resolve, reject, timer }
+
+function newestClient(role) {
+  return [...clients[role]].pop();
+}
+
+const parts = {
+  connected: (role) => clients[role].size > 0,
+  /** Sends a request to a part (e.g. the Chrome add-on) and waits for its answer. */
+  call(role, tool, args = {}, timeoutMs = 10000) {
+    const socket = newestClient(role);
+    if (!socket) return Promise.reject(new Error(`the ${role === "browser" ? "Chrome add-on" : role} isn't connected`));
+    const id = randomUUID();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pendingCalls.delete(id);
+        reject(new Error("it took too long to answer"));
+      }, timeoutMs);
+      pendingCalls.set(id, { resolve, reject, timer });
+      send(socket, { type: "request", id, tool, args });
+    });
+  },
+};
+
+function finishCall(message) {
+  const call = pendingCalls.get(message.id);
+  if (!call) return;
+  pendingCalls.delete(message.id);
+  clearTimeout(call.timer);
+  if (message.ok) call.resolve(message.data);
+  else call.reject(new Error(message.error || "it failed"));
+}
+
+/** The add-on core version on disk. If the running add-on is older, it must be reloaded once. */
+function expectedExtensionCore() {
+  try {
+    const source = readFileSync(path.join(EXTENSION_DIR, "background.js"), "utf8");
+    return Number((source.match(/CORE_VERSION\s*=\s*(\d+)/) || [])[1] || 0);
+  } catch {
+    return 0;
+  }
+}
+let extensionNeedsReload = false;
+
+const agent = createAgent({ broadcast, parts });
 
 // ---------- web server ----------
 const TYPES = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png" };
@@ -155,8 +207,18 @@ wss.on("connection", (socket) => {
         send(socket, { type: "history", messages: agent.history() });
         send(socket, { type: "status", ...agent.status(), connections: connections() });
       } else {
+        if (role === "browser") {
+          extensionNeedsReload = Number(message.core || 0) < expectedExtensionCore();
+          if (extensionNeedsReload) console.log("  The Chrome add-on has an update: reload it once in chrome://extensions.");
+        }
+        console.log(`  ${role === "browser" ? "Chrome add-on" : "Figma plugin"} connected.`);
         broadcastStatus();
       }
+      return;
+    }
+
+    if (role === "browser" || role === "figma") {
+      if (message.type === "result") finishCall(message);
       return;
     }
 
@@ -169,7 +231,10 @@ wss.on("connection", (socket) => {
   socket.on("close", () => {
     if (!role) return;
     clients[role].delete(socket);
-    if (role !== "console") broadcastStatus();
+    if (role !== "console") {
+      if (!clients[role].size) console.log(`  ${role === "browser" ? "Chrome add-on" : "Figma plugin"} disconnected.`);
+      broadcastStatus();
+    }
   });
 });
 

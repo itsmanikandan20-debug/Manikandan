@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Design Agent",
+  "version": "0.1.0",
+  "description": "Lets your Design Agent (running on this computer) see the web page you're looking at.",
+  "permissions": ["tabs", "scripting", "alarms", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Design Agent is connected when the Chrome light in the helper window is green"
+  }
+}
