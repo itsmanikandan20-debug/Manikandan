@@ -667,7 +667,7 @@ async function apply(changes) {
       const node = await applyOne(c, record);
       if (node) touched.push(node);
       const created = ["place_screenshot", "duplicate", "group"].includes(c.action) && node ? node.id : undefined;
-      results.push({ ok: true, change: c.action, id: c.id || (c.ids || []).join(",") || c.capture_id, created, capture_id: c.capture_id });
+      results.push({ ok: true, change: c.action, id: c.id || (c.ids || []).join(",") || c.capture_id, created, capture_id: c.capture_id, page: figma.currentPage.name });
     } catch (error) {
       results.push({ ok: false, change: c.action, id: c.id || (c.ids || []).join(","), error: error.message });
     }
@@ -695,7 +695,7 @@ async function apply(changes) {
     }
   }
   if (touched[0] && !touched[0].removed) figma.currentPage.selection = [touched[0]];
-  return { results, token, after: lines.join("\n"), screenshot, file: figma.root.name };
+  return { results, token, after: lines.join("\n"), screenshot, file: figma.root.name, fileKey: fileKey() };
 }
 
 /** Top-left corner for something of size "box" placed beside "anchor" (both absolute). */
@@ -807,12 +807,70 @@ async function undo(token) {
   return { ok: true, notes };
 }
 
+// ---------- finding things and going to them (doesn't change the design) ----------
+function pageOf(node) {
+  let n = node;
+  while (n && n.type !== "PAGE") n = n.parent;
+  return n;
+}
+function hasImageFill(node) {
+  return "fills" in node && Array.isArray(node.fills) && node.fills.some((f) => f.type === "IMAGE" && f.visible !== false);
+}
+
+/** Searches every page for layers by name, screenshots Design Agent placed, and images. */
+async function find(query) {
+  await figma.loadAllPagesAsync();
+  const q = String(query).toLowerCase().trim();
+  const wantsImages = !q || /screen ?shot|image|picture|photo|upload/.test(q);
+  const words = q.split(/\s+/).filter((w) => w.length > 2 && !/^(the|screenshot|screenshots|image|images|picture|photo|uploaded|upload|earlier|my|from)$/.test(w));
+  const found = [];
+  for (const page of figma.root.children) {
+    const nodes = page.findAll((n) => {
+      if (isPointer(n)) return false;
+      const byAgent = n.getPluginData("designAgentCapture") !== "";
+      const name = n.name.toLowerCase();
+      const nameMatch = words.length > 0 && words.every((w) => name.includes(w));
+      // Images: only fairly big ones near the top of the page tree (not icons inside components).
+      const depth = (() => { let d = 0; for (let p = n.parent; p && p.type !== "PAGE"; p = p.parent) d++; return d; })();
+      const bigImage = wantsImages && hasImageFill(n) && n.width >= 200 && n.height >= 150 && depth <= 2 && !(n.parent && n.parent.getPluginData && n.parent.getPluginData("designAgentCapture"));
+      return (wantsImages && byAgent) || nameMatch || bigImage;
+    });
+    for (const n of nodes) {
+      found.push({
+        id: n.id,
+        name: n.name,
+        page: page.name,
+        type: n.type.toLowerCase(),
+        size: `${round(n.width)}x${round(n.height)}`,
+        placed_by_design_agent: n.getPluginData("designAgentCapture") !== "",
+      });
+      if (found.length >= 40) break;
+    }
+    if (found.length >= 40) break;
+  }
+  return { file: figma.root.name, current_page: figma.currentPage.name, results: found };
+}
+
+/** Switches to the layer's page, selects it, zooms to it and points at it. */
+async function goTo(id) {
+  const node = await figma.getNodeByIdAsync(String(id));
+  if (!node || node.removed || node.type === "PAGE" || node.type === "DOCUMENT") return { ok: false, reason: "that layer isn't in this file (it may have been deleted)" };
+  const page = pageOf(node);
+  if (page && page !== figma.currentPage) await figma.setCurrentPageAsync(page);
+  figma.currentPage.selection = [node];
+  figma.viewport.scrollAndZoomIntoView([node]);
+  await point(node.id);
+  return { ok: true, page: page ? page.name : "", name: node.name };
+}
+
 // ---------- talking to Design Agent (through the plugin window) ----------
 async function runTool(tool, args) {
   if (tool === "figma.snapshot") return snapshot();
   if (tool === "figma.preview") return preview(args.changes || []);
   if (tool === "figma.apply") return apply(args.changes || []);
   if (tool === "figma.undo") return undo(args.token);
+  if (tool === "figma.find") return find(args.query || "");
+  if (tool === "figma.goto") return goTo(args.id);
   if (tool === "figma.point") return point(args.target);
   if (tool === "figma.hide") {
     removePointer();
@@ -836,12 +894,21 @@ figma.ui.onmessage = async (message) => {
 };
 
 // Tell Design Agent when you're working in Figma, so "this" means your Figma design.
+/** The file's key (for a link to it), when Figma shares it with this plugin. */
+function fileKey() {
+  try {
+    return figma.fileKey || "";
+  } catch (e) {
+    return "";
+  }
+}
+
 function reportActivity() {
   const selection = figma.currentPage.selection.filter((n) => !isPointer(n));
   figma.ui.postMessage({
     type: "event",
     name: "activity",
-    detail: { file: figma.root.name, page: figma.currentPage.name, selected: selection.length },
+    detail: { file: figma.root.name, fileKey: fileKey(), page: figma.currentPage.name, selected: selection.length },
   });
 }
 figma.on("selectionchange", () => {

@@ -55,6 +55,7 @@ export const CHANGE_TOOL = {
             radius: { type: "number" },
             name: { type: "string", description: "New layer name (rename, group)" },
             capture_id: { type: "string", description: 'Screenshot to add (place_screenshot): an id like cap3, or "latest"' },
+            figma_file: { type: "string", description: "place_screenshot: the Figma file the user named, if they named one. If it isn't open now, it's added the moment they open it." },
             near_id: { type: "string", description: "place_screenshot: put it beside this layer's top frame (default: the selection or the frame in view)" },
             target_id: { type: "string", description: "place_next_to: the layer to put it beside" },
             side: { type: "string", enum: ["right", "left", "below", "above"], description: "Which side (default right)" },

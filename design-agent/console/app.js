@@ -345,6 +345,9 @@
         $("caption").dataset.who = "agent";
         break;
       }
+      case "open_url":
+        window.open(message.url, "_blank", "noopener");
+        break;
       case "capturing":
         $("caption").textContent = message.fullPage ? "Taking a full-page screenshot (scrolling the page)…" : "Taking a screenshot…";
         $("caption").dataset.who = "agent";

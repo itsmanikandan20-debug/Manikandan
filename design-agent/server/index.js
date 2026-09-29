@@ -54,9 +54,12 @@ function newestClient(role) {
 
 // When you last did something in Chrome or in Figma, so "this" means the right one.
 const lastActivity = { browser: 0, figma: 0 };
+let figmaFile = { name: "", key: "", page: "" }; // the file open in Figma right now
 
 const parts = {
   connected: (role) => clients[role].size > 0,
+  /** The Figma file that's open (name, key, page), or null when Figma isn't connected. */
+  figmaFile: () => (clients.figma.size > 0 && figmaFile.name ? { ...figmaFile } : null),
   /** "browser" or "figma": the connected one you used most recently (or null). */
   activeSurface() {
     const connected = ["browser", "figma"].filter((role) => clients[role].size > 0);
@@ -263,7 +266,17 @@ wss.on("connection", (socket) => {
 
     if (role === "browser" || role === "figma") {
       if (message.type === "result") finishCall(message);
-      if (message.type === "event" && message.name === "activity") lastActivity[role] = Date.now();
+      if (message.type === "event" && message.name === "activity") {
+        lastActivity[role] = Date.now();
+        const detail = message.detail || {};
+        if (role === "figma" && detail.file) {
+          const changed = detail.file !== figmaFile.name;
+          figmaFile = { name: detail.file, key: detail.fileKey || "", page: detail.page || "" };
+          captures.rememberFile(detail.file, detail.fileKey || "");
+          // A screenshot may be waiting for this file.
+          if (changed) agent.figmaFileOpened(detail.file);
+        }
+      }
       return;
     }
 
@@ -283,6 +296,7 @@ wss.on("connection", (socket) => {
   socket.on("close", () => {
     if (!role) return;
     clients[role].delete(socket);
+    if (role === "figma" && !clients.figma.size) figmaFile = { name: "", key: "", page: "" };
     if (role !== "console") {
       if (!clients[role].size) console.log(`  ${role === "browser" ? "Chrome add-on" : "Figma plugin"} disconnected.`);
       broadcastStatus();

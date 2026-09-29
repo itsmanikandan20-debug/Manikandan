@@ -53,6 +53,30 @@ const SCREENSHOT_TOOL = {
   parameters: { type: "object", properties: { full_page: { type: "boolean" } } },
 };
 
+const FIND_TOOL = {
+  name: "find_in_figma",
+  description:
+    "Search every page of the open Figma file for layers: screenshots Design Agent placed, other big images (like screenshots the user uploaded), " +
+    "or layers whose name contains the words. Returns ids, names and pages. Doesn't change anything.",
+  parameters: { type: "object", properties: { query: { type: "string", description: 'For example "screenshot", "apple", "hero section"' } } },
+};
+
+const GOTO_TOOL = {
+  name: "go_to_figma_layer",
+  description:
+    "Take the user to a layer in the open Figma file: switch to its page, select it, zoom to it and point at it. " +
+    "Doesn't change the design, so no approval is needed.",
+  parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+};
+
+const OPEN_FILE_TOOL = {
+  name: "open_figma_file",
+  description:
+    "Open a Figma file the user has used with Design Agent before, by name (opens its link). " +
+    "Use when the thing they're looking for is in a different file than the one open.",
+  parameters: { type: "object", properties: { file: { type: "string" } }, required: ["file"] },
+};
+
 const LIST_SCREENSHOTS_TOOL = {
   name: "list_screenshots",
   description: "List the screenshots saved in the user's library (newest first): id, name, page address, when, and where each was put in Figma.",
@@ -80,7 +104,8 @@ export function createAgent({ broadcast, parts, captures }) {
     const tools = [];
     if (parts.connected("browser")) tools.push(WEB_TOOL, SCREENSHOT_TOOL);
     tools.push(LIST_SCREENSHOTS_TOOL);
-    if (parts.connected("figma")) tools.push(FIGMA_TOOL, CHANGE_TOOL);
+    if (parts.connected("figma")) tools.push(FIGMA_TOOL, FIND_TOOL, GOTO_TOOL);
+    tools.push(CHANGE_TOOL, OPEN_FILE_TOOL); // changes can also be for a file that isn't open yet
     let lastError;
     for (const model of await ensureModels()) {
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -154,29 +179,46 @@ export function createAgent({ broadcast, parts, captures }) {
   let lastApplied = null; // { token, summary } so "undo" can put it back
 
   async function propose(args) {
-    if (!parts.connected("figma")) return { error: "Figma isn't connected, so nothing can be changed. Ask the user to run the Design Agent plugin in Figma." };
     const changes = Array.isArray(args.changes) ? args.changes.slice(0, 20) : [];
     if (!changes.length) return { error: "No changes were given." };
-    // Screenshots: attach their details (the image itself is added only when approved).
+    const open = parts.figmaFile();
+    const later = []; // screenshots for a Figma file that isn't open: added when it opens
+    const now = [];
     for (const c of changes) {
-      if (c.action !== "place_screenshot") continue;
-      const entry = captures.get(c.capture_id || "latest");
-      if (!entry) return { error: "There's no saved screenshot yet. Take one first (take_screenshot)." };
-      c.capture_id = entry.id;
-      c.capture = { name: entry.name, css_width: entry.cssWidth, css_height: entry.cssHeight };
+      if (c.action === "place_screenshot") {
+        // Attach the screenshot's details (the image itself is added only when approved).
+        const entry = captures.get(c.capture_id || "latest");
+        if (!entry) return { error: "There's no saved screenshot yet. Take one first (take_screenshot)." };
+        c.capture_id = entry.id;
+        c.capture = { name: entry.name, css_width: entry.cssWidth, css_height: entry.cssHeight };
+        if (c.figma_file && !(open && captures.sameFile(c.figma_file, open.name))) {
+          later.push(c);
+          continue;
+        }
+        delete c.figma_file;
+      }
+      now.push(c);
     }
-    let preview;
-    try {
-      preview = await parts.call("figma", "figma.preview", { changes }, 15000);
-    } catch (error) {
-      return { error: `Couldn't check the changes in Figma: ${error.message}` };
+    if (now.length && !parts.connected("figma")) {
+      return { error: "Figma isn't connected, so nothing can be changed now. Ask the user to run the Design Agent plugin in Figma." };
     }
-    if (!preview.lines.length) return { error: "None of these changes can be made: " + preview.problems.join("; ") };
+
+    let preview = { lines: [], problems: [], valid: [] };
+    if (now.length) {
+      try {
+        preview = await parts.call("figma", "figma.preview", { changes: now }, 15000);
+      } catch (error) {
+        return { error: `Couldn't check the changes in Figma: ${error.message}` };
+      }
+    }
+    const laterLines = later.map((c) => `Add "${c.capture.name}" to the Figma file "${c.figma_file}" — it appears as soon as you open that file`);
+    const lines = preview.lines.concat(laterLines);
+    if (!lines.length) return { error: "None of these changes can be made: " + preview.problems.join("; ") };
 
     if (pending) broadcast({ type: "approval_update", id: pending.id, state: "replaced" });
     // Only the changes that passed the check will be applied.
-    const doable = changes.filter((c, i) => !preview.valid || preview.valid[i]);
-    pending = { id: randomUUID(), summary: String(args.summary || "Change the design"), changes: doable, lines: preview.lines, problems: preview.problems };
+    const doable = now.filter((c, i) => !preview.valid || preview.valid[i]).concat(later);
+    pending = { id: randomUUID(), summary: String(args.summary || "Change the design"), changes: doable, lines, problems: preview.problems };
     broadcast({ type: "approval", id: pending.id, summary: pending.summary, lines: pending.lines, problems: pending.problems });
     console.log(`  Waiting for approval: ${pending.summary}`);
     return {
@@ -187,6 +229,52 @@ export function createAgent({ broadcast, parts, captures }) {
     };
   }
 
+  // ---------- screenshots waiting for a Figma file ----------
+  let delivering = false;
+
+  /** Called when a Figma file opens: adds any screenshots the user asked to put in it. */
+  async function figmaFileOpened(fileName) {
+    const waiting = captures.deliveriesFor(fileName);
+    if (!waiting.length || delivering) return;
+    delivering = true;
+    try {
+      await wait(1500); // let the plugin settle after opening the file
+      if (!(await waitUntilFree())) return;
+      busy = true;
+      const placed = [];
+      for (const d of waiting) {
+        const entry = captures.get(d.change.capture_id);
+        if (!entry) {
+          captures.removeDelivery(d.id);
+          continue;
+        }
+        const change = { ...d.change, near_id: undefined, images: captures.load(entry) };
+        delete change.figma_file;
+        try {
+          const result = await parts.call("figma", "figma.apply", { changes: [change] }, 60000);
+          const r = result.results[0];
+          if (r && r.ok) {
+            captures.markPlaced(entry.id, r.created, result.file, r.page);
+            captures.removeDelivery(d.id);
+            placed.push({ name: entry.name, id: r.created });
+            lastApplied = { token: result.token, summary: `Add ${entry.name}` };
+          }
+        } catch (error) {
+          console.log(`  Couldn't add the waiting screenshot yet: ${error.message}`);
+        }
+      }
+      busy = false;
+      if (placed.length) {
+        console.log(`  Added ${placed.length} waiting screenshot(s) to "${fileName}"`);
+        const what = placed.length === 1 ? `the screenshot "${placed[0].name}"` : `${placed.length} screenshots`;
+        sayDirect(null, `I've added ${what} to this file, like you asked. [[${placed[0].id}]] Here it is.`);
+      }
+    } finally {
+      busy = false;
+      delivering = false;
+    }
+  }
+
   async function runTool(call) {
     if (call.name === "look_at_webpage" || call.name === "look_at_figma") {
       const [description, ...images] = call.name === "look_at_figma" ? await lookAtFigma() : await lookAtWebpage();
@@ -195,11 +283,39 @@ export function createAgent({ broadcast, parts, captures }) {
     if (call.name === "propose_figma_changes") return { response: await propose(call.args || {}), extra: [] };
     if (call.name === "take_screenshot") return { response: await takeScreenshot(Boolean((call.args || {}).full_page)), extra: [] };
     if (call.name === "list_screenshots") {
+      const open = parts.figmaFile();
+      const waiting = captures.waitingDeliveries();
       const list = captures.list().slice(0, 20).map((c) => ({
-        id: c.id, name: c.name, page: c.url, taken: c.createdAt,
-        in_figma: c.placedInFigma.map((p) => `layer ${p.nodeId} in "${p.file}"`),
+        id: c.id, name: c.name, web_page: c.url, taken: c.createdAt,
+        in_figma: c.placedInFigma.map((p) => ({
+          layer_id: p.nodeId, file: p.file, page: p.page,
+          file_is_open_now: Boolean(open && captures.sameFile(open.name, p.file)),
+        })),
+        waiting_for_file: waiting.filter((d) => d.change.capture_id === c.id).map((d) => d.file),
       }));
-      return { response: { screenshots: list, total: captures.list().length }, extra: [] };
+      return { response: { screenshots: list, total: captures.list().length, figma_file_open_now: open ? open.name : null }, extra: [] };
+    }
+    if (call.name === "find_in_figma") {
+      try {
+        return { response: await parts.call("figma", "figma.find", { query: (call.args || {}).query || "" }, 30000), extra: [] };
+      } catch (error) {
+        return { response: { error: error.message }, extra: [] };
+      }
+    }
+    if (call.name === "go_to_figma_layer") {
+      try {
+        return { response: await parts.call("figma", "figma.goto", { id: String((call.args || {}).id || "") }, 15000), extra: [] };
+      } catch (error) {
+        return { response: { error: error.message }, extra: [] };
+      }
+    }
+    if (call.name === "open_figma_file") {
+      const name = String((call.args || {}).file || "");
+      const file = captures.findFile(name);
+      if (!file) return { response: { error: `I haven't seen a Figma file called "${name}" yet.` }, extra: [] };
+      if (!file.key) return { response: { error: `Figma doesn't share "${file.name}"'s link with the plugin, so the user needs to open it themselves (in Figma: recent files).` }, extra: [] };
+      broadcast({ type: "open_url", url: `https://www.figma.com/design/${file.key}` });
+      return { response: { opening: file.name, note: "Once it's open and the plugin is running, you can take them to the layer." }, extra: [] };
     }
     return { response: { error: `Unknown tool ${call.name}` }, extra: [] };
   }
@@ -242,6 +358,18 @@ export function createAgent({ broadcast, parts, captures }) {
     if (!(await waitUntilFree())) return;
     const proposal = pending;
     pending = null;
+
+    // Screenshots for a file that isn't open: remember them; they're added when it opens.
+    const later = proposal.changes.filter((c) => c.figma_file);
+    for (const c of later) captures.addDelivery(c, c.figma_file);
+    proposal.changes = proposal.changes.filter((c) => !c.figma_file);
+    if (!proposal.changes.length) {
+      broadcast({ type: "approval_update", id, state: "applied", failed: 0 });
+      const file = later[0].figma_file;
+      sayDirect(userText, `Okay. I'll add it to "${file}" the moment you open that file in Figma, with the Design Agent plugin running.`);
+      return;
+    }
+
     busy = true;
     broadcast({ type: "approval_update", id, state: "applying" });
     let result;
@@ -261,7 +389,7 @@ export function createAgent({ broadcast, parts, captures }) {
     }
     busy = false;
     const failed = result.results.filter((r) => !r.ok);
-    for (const r of result.results) if (r.ok && r.capture_id && r.created) captures.markPlaced(r.capture_id, r.created, result.file || "");
+    for (const r of result.results) if (r.ok && r.capture_id && r.created) captures.markPlaced(r.capture_id, r.created, result.file || "", r.page);
     lastApplied = { token: result.token, summary: proposal.summary };
     broadcast({ type: "approval_update", id, state: "applied", failed: failed.length });
     console.log(`  Applied: ${proposal.summary}${failed.length ? ` (${failed.length} failed)` : ""}`);
@@ -405,6 +533,7 @@ export function createAgent({ broadcast, parts, captures }) {
   return {
     handleUserText,
     approve: (id) => approve(id),
+    figmaFileOpened: (name) => figmaFileOpened(name),
     reject: (id) => reject(id),
     undoLast: () => undoLast(),
     /** Sent to a helper window when it opens, so a waiting card shows up there too. */

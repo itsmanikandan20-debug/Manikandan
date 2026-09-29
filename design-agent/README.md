@@ -35,11 +35,21 @@ This needs the **Chrome add-on**, installed once (below).
 
 ## Screenshots
 
-- Say **"Take a screenshot of this page"** for what's on screen, or **"Take a
+- Say **"Take a screenshot"** for exactly what's on screen, or **"Take a
   full-page screenshot"** for the whole page (it scrolls and stitches; very long
   pages stop at 16,000 px). Its orange pointer and the page's scrollbar are left
   out, and sticky headers appear only once.
 - Screenshots are saved on your computer in **design-agent\data\captures**.
+- Say **"Put it in my Portfolio file"** (any file name). If that file isn't
+  open, Design Agent remembers it and adds the screenshot **the moment you open
+  that file** (with the plugin running) and tells you where it is. Figma only
+  lets plugins change the file that's open, which is why it waits.
+- Say **"Where did you put it?"**: it switches to the right page, selects the
+  screenshot, zooms to it and points at it. If it's in another file, it tells
+  you which file and page (and can open it when Figma shares the file's link).
+- Say **"Where's the screenshot I uploaded earlier?"**: it searches every page
+  for images and takes you to it. **"Move it next to the hero section"** moves
+  it after your yes.
 - Say **"Put it in my Figma file"**. The approval card shows where it goes (to
   the right of your selected or visible frame, unless you say where). After your
   **yes** it's added as a frame named "Screenshot – site – date". Long pages are
