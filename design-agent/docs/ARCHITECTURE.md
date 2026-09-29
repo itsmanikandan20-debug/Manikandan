@@ -1,8 +1,22 @@
 # AI Design Agent — Architecture & Implementation Plan
 
-> Status: **plan only — no code yet.** This document is the agreed blueprint.
-> We build it phase by phase (see §9), and each phase ends with something you
-> can try on your own computer.
+> Status: **Step 1 built** (typed chat in the helper window). This document is
+> the agreed blueprint. We build it phase by phase (see §9), and each phase ends
+> with something you can try on your own computer.
+>
+> **Decisions made with the user (these override anything below that differs):**
+> - **AI:** Google **Gemini free tier** instead of the Anthropic API (no paid key).
+>   The newest stable "flash" model is picked automatically. The AI code sits
+>   behind one small module (`server/ai/`) so Ollama or another provider can be
+>   added later.
+> - **Voice:** free browser voice (Web Speech API + `speechSynthesis`).
+> - **Computer:** Windows. Started by double-clicking `Start Design Agent.bat`.
+> - **Hosting:** none. Everything runs locally; no Vercel.
+> - **Language:** plain JavaScript (no TypeScript, no build step) so it runs
+>   with just `node`, which keeps setup simple for a beginner.
+> - **Figma auto-start:** the plugin can't start itself, so the local server
+>   will press Figma's "run last plugin" shortcut (Ctrl+Alt+P) for the user
+>   when Figma is in front and the plugin isn't connected yet (Step 8).
 
 ---
 
@@ -50,7 +64,7 @@ voice, one conversation and one memory.
                     ┌───────────────▼──────────────────────────┐
                     │  LOCAL AGENT SERVER  (the "brain")        │
                     │  Node.js · http://localhost:3456          │
-                    │  • agent loop (Claude API, tool use)      │
+                    │  • agent loop (Gemini API, tool use)      │
                     │  • approval gate  • session memory        │
                     │  • tool router    • files in ./data       │
                     └───────┬───────────────────────┬──────────┘
@@ -65,16 +79,16 @@ voice, one conversation and one memory.
                                           └────────────────────────────┘
                            │
                     ┌──────▼──────────┐
-                    │ Anthropic API   │  ← the only required cloud service
-                    │ (Claude)        │
+                    │ Google Gemini   │  ← the only required cloud service
+                    │ (free tier)     │
                     └─────────────────┘
 ```
 
 ### 3.1 The five parts and their jobs
 
 **A. Local Agent Server — the AI agent / the brain** (`server/`)
-- A small Node.js + TypeScript program you start with `npm run dev`.
-- Owns the single conversation, calls Claude, decides which tool to use,
+- A small Node.js program you start by double-clicking `Start Design Agent.bat`.
+- Owns the single conversation, calls the AI, decides which tool to use,
   enforces approvals, stores screenshots and history as plain files in
   `./data`.
 - Is the only part that holds your API key. The extension and plugin never see it.
@@ -105,7 +119,7 @@ voice, one conversation and one memory.
 - A development plugin you import once into **Figma Desktop**
   (Plugins → Development → Import plugin from manifest).
 - Two halves, because that is how Figma plugins work:
-  - *main code* (`code.ts`): has the Figma Plugin API (`figma.*`) but **no
+  - *main code* (`code.js`): has the Figma Plugin API (`figma.*`) but **no
     network**. Reads/edits the document.
   - *UI iframe* (`ui.html`): has network access (to `localhost` only, declared
     in the manifest) but no document access. Holds the WebSocket and relays
@@ -118,7 +132,7 @@ voice, one conversation and one memory.
 - Executes approved edits, and draws the Figma AI pointer.
 
 **E. Shared protocol** (`shared/`)
-- One TypeScript file describing every message type, used by all parts, so
+- One file describing every message type, used by all parts, so
   they can't drift apart.
 
 ### 3.2 How the parts talk
@@ -148,23 +162,23 @@ Screenshots travel as PNG files: extension → `POST /captures` → saved in
 
 ## 4. The agent loop (how it "thinks")
 
-The server runs Claude with **tool use**. Each user turn:
+The server runs the AI with **tool use**. Each user turn:
 
 1. **OBSERVE** — The server works out the *active surface* (the thing you
    touched last: Chrome tab or Figma selection; "on the website" / "in Figma"
    in your sentence overrides it) and asks that side for a fresh snapshot +
-   screenshot. Claude can also call observe tools itself to look closer.
-2. **UNDERSTAND** — Claude gets: your words, the structured snapshot (real
+   screenshot. The AI can also call observe tools itself to look closer.
+2. **UNDERSTAND** — The AI gets: your words, the structured snapshot (real
    numbers), the screenshot (the visual gestalt), and the conversation so far.
-3. **DISCUSS / SUGGEST** — Claude answers in speakable sentences, explaining
+3. **DISCUSS / SUGGEST** — The AI answers in speakable sentences, explaining
    *why*, pointing at elements as it goes.
-4. **ASK FOR APPROVAL** — If a change is useful, Claude calls a *mutating*
+4. **ASK FOR APPROVAL** — If a change is useful, the AI calls a *mutating*
    tool. The server does **not** run it; it turns it into a **Pending
    Action** ("Reduce gap between *Heading* and *Subtitle* from 32 → 24 px")
-   and Claude asks you.
+   and the AI asks you.
 5. **ACT** — Only after your approval does the server send it to Figma.
 6. **VERIFY** — The plugin re-reads the changed nodes and exports a small
-   image; Claude checks the result and tells you what changed ("Done — the
+   image; the AI checks the result and tells you what changed ("Done — the
    gap is now 24 px and the group reads as one unit"). You can say
    "undo that" (we keep the before-values; Figma's own Cmd/Ctrl+Z also works).
 
@@ -191,7 +205,7 @@ The server runs Claude with **tool use**. Each user turn:
 
 ### 4.3 Pointer ↔ speech synchronisation
 
-Claude writes its reply with tiny inline markers, e.g.
+The AI writes its reply with tiny inline markers, e.g.
 
 `[[point:w17|heading]] This heading is doing its job. [[point:w23]] But the button below it…`
 
@@ -207,7 +221,7 @@ playing**. So the arrow moves in step with the voice.
   replies; the mic reopens. **Barge-in**: if you start talking while it
   speaks, it stops and listens.
 - **Push-to-talk mode** and **typing** are always available.
-- **Streaming**: Claude's answer is streamed and spoken sentence by sentence,
+- **Streaming**: The AI's answer is streamed and spoken sentence by sentence,
   so it starts talking after ~1–2 s instead of waiting for the whole answer.
 - Built behind a `VoiceProvider` interface so providers can be swapped:
 
@@ -225,11 +239,11 @@ Tip: use headphones — speakers + open mic causes echo and self-interruption.
 
 | Part | Technology | Why this one |
 |---|---|---|
-| Everything | **TypeScript** on **Node.js 20+** | One language everywhere; you already have Node |
+| Everything | **JavaScript** on **Node.js 18+**, no build step | One language everywhere; you already have Node |
 | Monorepo | npm workspaces | No extra tools |
-| AI | **Anthropic API** via `@anthropic-ai/sdk` (Messages API, tool use, streaming, image input) | The agent brain |
+| AI | **Google Gemini API, free tier** (streaming, image input, function calling), plain `fetch` | The agent brain, free |
 | Server | Node `http` + `ws` (WebSocket) | Tiny, no framework needed |
-| Console UI | Vite + plain TypeScript (maybe React later) | Fast dev reload, beginner-friendly |
+| Console UI | Plain HTML, CSS and JavaScript served by the local server | Nothing to build or install |
 | Extension | Chrome Manifest V3 (`tabs`, `scripting`, `activeTab`, `storage`) | Official, required for tab screenshots and DOM access |
 | Figma | Figma **Plugin API** (official) + esbuild to bundle | Only official way to read *and write* the open file |
 | Voice | Web Speech API → swappable providers | Zero setup first |
@@ -249,21 +263,18 @@ open file, can write, and is what lets us draw a pointer. We can revisit MCP lat
 
 | Runs 100 % on your computer | Needs an external service |
 |---|---|
-| Agent server, approval gate, memory, file storage | **Claude (Anthropic API)** — required |
+| Agent server, approval gate, memory, file storage | **Google Gemini API (free tier)** — required |
 | Chrome extension (DOM reading, screenshots, pointer) | STT: Chrome's Web Speech API uses Google's servers (free) — or a paid provider |
 | Figma plugin (reading, editing, pointer) | TTS: browser voices are local/free; premium voices are paid APIs |
 | Console UI | Figma Desktop itself syncs your file to Figma's cloud as usual |
 
-⚠️ **Important — your Claude subscription is not an API key.** A Claude
-Pro/Max subscription covers claude.ai and Claude Code; a custom app like this
-calls the **Anthropic API**, which needs an API key from
-<https://console.anthropic.com> with its own pay-as-you-go billing. Set a
-monthly spend limit in the Console. A review turn with a screenshot is a
-small cost per turn; we'll show a running token count in the console and use a
-fast model for chat, with a stronger model optional for deep reviews.
+**AI service:** Google Gemini's free tier (key from
+<https://aistudio.google.com/apikey>, no credit card). It has per-minute and
+per-day limits; the helper window says so plainly when one is hit. On the free
+tier Google may use prompts to improve its products.
 
 Privacy: page contents, screenshots and Figma data you discuss are sent to
-the Anthropic API. The extension only reads a tab when you ask the agent
+Google's Gemini API. The extension only reads a tab when you ask the agent
 something about it.
 
 ---
@@ -331,7 +342,7 @@ the previous phase works on your machine.
 
 | Phase | What we build | You can try… |
 |---|---|---|
-| **0. Foundation** | Workspace skeleton, `.env` with API key, server + WebSocket hub, console with **typed** chat to Claude | "Hi, are you there?" → a reply in the console |
+| **0. Foundation** | Workspace skeleton, `.env` with API key, server + WebSocket hub, console with **typed** chat to the AI | "Hi, are you there?" → a reply in the console |
 | **1. Browser eyes** | Chrome extension: connect, page snapshot + screenshot tools, "design partner" system prompt | Type "Review this page" on any website → grounded critique |
 | **2. Voice** | Continuous voice (Web Speech), sentence-streamed TTS, barge-in, push-to-talk | *Say* "What font are they using?" and hear the answer |
 | **3. Browser pointer** | Overlay pointer + inline `[[point:…]]` sync with speech | The arrow moves to each element as it talks about it |
@@ -344,37 +355,27 @@ the previous phase works on your machine.
 
 ```
 design-agent/
-├── package.json            ← npm workspaces + one-command scripts
-├── .env.example            ← ANTHROPIC_API_KEY=...
+├── Start Design Agent.bat  ← double-click to start (Windows)
+├── package.json            ← one dependency: ws
+├── .env.example            ← GEMINI_API_KEY=... (the helper window fills .env for you)
 ├── docs/ARCHITECTURE.md    ← this file
-├── shared/                 ← message types used by every part
-│   └── protocol.ts
 ├── server/                 ← the brain
-│   └── src/
-│       ├── index.ts        ← http + WebSocket hub
-│       ├── agent/          ← loop, system prompt, tool definitions
-│       ├── approvals.ts    ← the approval gate
-│       ├── surfaces.ts     ← which app is "active"
-│       └── storage.ts      ← ./data files
-├── console/                ← voice + chat UI (served at localhost:3456)
-│   └── src/ (voice/, ui/)
-├── extension/              ← Chrome extension (load unpacked)
-│   ├── manifest.json
-│   └── src/ (background.ts, content/snapshot.ts, content/pointer.ts)
-├── figma-plugin/           ← import manifest in Figma Desktop
-│   ├── manifest.json
-│   └── src/ (code.ts, ui.html, serialize.ts, actions.ts, pointer.ts)
-└── data/                   ← captures, logs (git-ignored)
+│   ├── index.js            ← http + WebSocket hub, serves the helper window
+│   ├── env.js              ← reads/writes .env
+│   ├── open-window.js      ← opens the helper as an app window
+│   ├── ai/gemini.js        ← talks to Gemini (swappable)
+│   └── agent/              ← agent loop, system prompt; later: tools, approvals
+├── console/                ← helper window (index.html, style.css, app.js)
+├── extension/              ← Step 2: Chrome add-on (load unpacked)
+├── figma-plugin/           ← Step 5: import manifest in Figma Desktop
+└── data/                   ← screenshots, logs (git-ignored)
 ```
 
-Daily use, once built: `npm run dev` in one terminal → open the console →
-Chrome extension is already loaded → run the plugin in Figma → talk.
+Daily use, once built: double-click **Start Design Agent** → the helper window
+opens → the Chrome add-on is already on → Figma connects automatically → talk.
 
 ---
 
-## 10. Decisions to confirm before Phase 0
+## 10. Decisions
 
-1. **Anthropic API key** — OK to create one (separate pay-as-you-go billing)?
-2. **Voice** — start with the free browser voice (recommended), or go straight to a paid natural voice?
-3. **Location** — build in `design-agent/` inside this repository (alongside DesignCheck), or a new repository?
-4. **Your OS** — Windows or macOS? (affects a few setup instructions and the later Electron hotkey.)
+Confirmed; see the list at the top of this document.

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Design Agent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700&family=Figtree:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="helper">
+    <header class="head">
+      <div class="title-row">
+        <div class="title"><i class="logo"></i>Design Agent</div>
+        <div class="actions">
+          <button type="button" id="new-chat" class="icon-btn" title="Start a new conversation">New chat</button>
+          <button type="button" id="key-btn" class="icon-btn" title="Change your Gemini key">Key</button>
+        </div>
+      </div>
+      <div class="status">
+        <span id="st-ai" class="pill">AI</span>
+        <span id="st-browser" class="pill" title="Arrives in Step 2">Chrome</span>
+        <span id="st-figma" class="pill" title="Arrives in Step 5">Figma</span>
+      </div>
+    </header>
+
+    <section id="setup" class="setup" hidden>
+      <h2>Add your free AI key</h2>
+      <p>Design Agent uses Google Gemini, which is free. You only do this once.</p>
+      <ol>
+        <li>Open <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> and sign in with Google.</li>
+        <li>Click <b>Create API key</b>, then <b>Copy</b>.</li>
+        <li>Paste it below and click <b>Save key</b>.</li>
+      </ol>
+      <form id="key-form">
+        <label for="key-input">Your Gemini key</label>
+        <input id="key-input" type="password" autocomplete="off" spellcheck="false" placeholder="AIza…">
+        <button type="submit" id="key-save" class="primary">Save key</button>
+        <p id="key-msg" class="form-msg" role="status"></p>
+      </form>
+      <p class="small">Your key is saved only on this computer, in the <code>.env</code> file.</p>
+    </section>
+
+    <section id="chat" class="chat" aria-live="polite">
+      <div id="empty" class="empty">
+        <p class="empty-title">Hi! I'm your design partner.</p>
+        <p>Ask me anything about UX or UI. For example:</p>
+        <button type="button" class="suggest">How do I make a call-to-action button stand out?</button>
+        <button type="button" class="suggest">What's a good spacing system for a landing page?</button>
+        <button type="button" class="suggest">Which fonts pair well for a portfolio?</button>
+      </div>
+    </section>
+
+    <form id="composer" class="composer">
+      <button type="button" id="mic" class="mic" disabled title="Voice arrives in Step 3">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+        <span class="sr">Voice (coming in Step 3)</span>
+      </button>
+      <label for="text" class="sr">Message</label>
+      <textarea id="text" rows="1" placeholder="Type to your design partner…"></textarea>
+      <button type="submit" id="send" class="primary">Send</button>
+    </form>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
