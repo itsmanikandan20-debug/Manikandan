@@ -56,11 +56,29 @@ function json(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
+// Requests that change something must carry this header. Browsers don't let
+// other websites add custom headers to requests to us, so they can't use these.
+const fromOurApp = (req) => req.headers["x-design-agent"] === "1";
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, URL_BASE);
 
   if (url.pathname === "/api/status") {
     return json(res, 200, { ...agent.status(), connections: connections() });
+  }
+
+  if (req.method === "POST" && !fromOurApp(req)) {
+    return json(res, 403, { ok: false, error: "Not allowed." });
+  }
+
+  // A newer start of Design Agent asks the running one to make room for it.
+  if (url.pathname === "/api/quit" && req.method === "POST") {
+    json(res, 200, { ok: true });
+    console.log("\n  Design Agent was started again in another window, so this one is closing.\n");
+    for (const socket of wss.clients) socket.terminate();
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 1000).unref();
+    return;
   }
 
   if (url.pathname === "/api/key" && req.method === "POST") {
@@ -103,7 +121,20 @@ const server = http.createServer(async (req, res) => {
 });
 
 // ---------- WebSocket hub ----------
-const wss = new WebSocketServer({ server, path: "/ws" });
+// Only our own parts may connect: the helper window (same address), the Chrome
+// add-on (chrome-extension://) and the Figma plugin (its iframe reports "null").
+function allowedOrigin(origin) {
+  if (!origin || origin === "null") return true;
+  if (origin.startsWith("chrome-extension://")) return true;
+  return origin === URL_BASE || origin === `http://127.0.0.1:${PORT}`;
+}
+
+const wss = new WebSocketServer({
+  server,
+  path: "/ws",
+  verifyClient: ({ origin }) => allowedOrigin(origin),
+});
+wss.on("error", () => {}); // listen errors are handled on the server below
 
 wss.on("connection", (socket) => {
   let role = null;
@@ -143,9 +174,11 @@ wss.on("connection", (socket) => {
 
 server.on("error", (error) => {
   if (error.code === "EADDRINUSE") {
-    console.log(`\nDesign Agent is already running. Opening the helper window: ${URL_BASE}\n`);
+    console.log(`\n  Another copy of Design Agent is already running (port ${PORT}), and it didn't close.`);
+    console.log("  Close any other black Design Agent windows, then start it again.");
+    console.log("  If you can't find one, restart your computer.\n");
     if (shouldOpen) openWindow(URL_BASE);
-    setTimeout(() => process.exit(0), 500);
+    process.exitCode = 1;
     return;
   }
   throw error;

@@ -146,7 +146,7 @@
     try {
       const response = await fetch("/api/key", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", "x-design-agent": "1" },
         body: JSON.stringify({ key: $("key-input").value }),
       });
       const result = await response.json();
