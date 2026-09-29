@@ -7,7 +7,7 @@ const SERVER = "ws://localhost:3456/ws";
 const STATUS_URL = "http://localhost:3456/api/status";
 // Raise this whenever background.js or manifest.json change, so the helper can ask
 // you to reload the add-on once (Chrome only picks up those two files on reload).
-const CORE_VERSION = 3;
+const CORE_VERSION = 4;
 let socket = null;
 let pingTimer = null;
 let checking = false;
@@ -75,6 +75,24 @@ chrome.alarms.onAlarm.addListener(connect);
 chrome.runtime.onStartup.addListener(connect);
 chrome.runtime.onInstalled.addListener(connect);
 connect();
+
+// Tell Design Agent when you're working in Chrome, so "this" means the web page.
+function reportActivity() {
+  send({ type: "event", name: "activity" });
+}
+chrome.tabs.onActivated.addListener(reportActivity);
+chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
+  if (change.status === "complete" && tab.active) reportActivity();
+});
+chrome.windows.onFocusChanged.addListener(async (windowId) => {
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+  try {
+    const win = await chrome.windows.get(windowId);
+    if (win.type === "normal") reportActivity(); // not the helper window
+  } catch {
+    // window already closed
+  }
+});
 
 // ---------- messages from Design Agent ----------
 async function handle(message) {

@@ -1,0 +1,65 @@
+<!-- The plugin's small window. It holds the connection to Design Agent on this computer
+     (the plugin's main code can't use the network) and passes messages both ways. -->
+<style>
+  :root { --ink: #16181D; --muted: #5A6170; --ok: #1F9D55; --off: #A3A9B4; --ai: #F2561D; }
+  body { margin: 0; font: 13px/1.4 "Inter", system-ui, "Segoe UI", sans-serif; color: var(--ink); background: #fff; }
+  .wrap { padding: 12px 14px; display: grid; gap: 6px; }
+  .title { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .logo { width: 16px; height: 16px; border-radius: 5px; background: var(--ai); }
+  .status { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--off); flex: none; }
+  .on .dot { background: var(--ok); }
+  .on { color: var(--ink); }
+  .hint { color: var(--muted); font-size: 12px; }
+</style>
+<div class="wrap">
+  <div class="title"><span class="logo"></span>Design Agent</div>
+  <div id="status" class="status"><span class="dot"></span><span id="status-text">Connecting…</span></div>
+  <div id="hint" class="hint">Keep this open while you work. You can make it small.</div>
+</div>
+<script>
+  const SERVER = "ws://localhost:3456/ws";
+  let socket = null;
+
+  function setStatus(connected, text) {
+    document.getElementById("status").classList.toggle("on", connected);
+    document.getElementById("status-text").textContent = text;
+  }
+
+  function connect() {
+    try {
+      socket = new WebSocket(SERVER);
+    } catch (e) {
+      setTimeout(connect, 3000);
+      return;
+    }
+    socket.onopen = () => {
+      socket.send(JSON.stringify({ type: "hello", role: "figma" }));
+      setStatus(true, "Connected. Talk to it in the helper window.");
+      parent.postMessage({ pluginMessage: { type: "connected" } }, "*");
+    };
+    socket.onmessage = (event) => {
+      let message;
+      try { message = JSON.parse(event.data); } catch (e) { return; }
+      if (message.type === "request") parent.postMessage({ pluginMessage: message }, "*");
+    };
+    socket.onclose = () => {
+      setStatus(false, "Design Agent isn't running. Start it and this connects by itself.");
+      setTimeout(connect, 3000);
+    };
+    socket.onerror = () => {};
+  }
+
+  // Messages from the plugin's main code (results and activity) go to Design Agent.
+  window.onmessage = (event) => {
+    const message = event.data && event.data.pluginMessage;
+    if (message && socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+  };
+
+  // Keep the connection busy so nothing closes it for being idle.
+  setInterval(() => {
+    if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "ping" }));
+  }, 20000);
+
+  connect();
+</script>

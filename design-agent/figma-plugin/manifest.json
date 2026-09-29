@@ -1,0 +1,14 @@
+{
+  "name": "Design Agent",
+  "id": "design-agent-local-dev",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["none"],
+    "devAllowedDomains": ["http://localhost:3456", "ws://localhost:3456"],
+    "reasoning": "Talks only to Design Agent running on this computer."
+  }
+}

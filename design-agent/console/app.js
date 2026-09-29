@@ -195,7 +195,9 @@
       showProblem("The Chrome add-on has an update. In Chrome, open chrome://extensions and click the reload arrow ↻ on Design Agent.");
     }
     $("st-browser").title = chromeOn ? "Chrome add-on connected: ask about the page you're looking at" : "Chrome add-on not connected (see the setup guide)";
-    $("st-figma").classList.toggle("on", Boolean(status.connections && status.connections.figma));
+    const figmaOn = Boolean(status.connections && status.connections.figma);
+    $("st-figma").classList.toggle("on", figmaOn);
+    $("st-figma").title = figmaOn ? "Figma plugin connected: ask about your design" : "In Figma: Plugins → Development → Design Agent";
   }
 
   // ---------- connection to the local server ----------
@@ -264,7 +266,7 @@
         const phrases = ["Let me take a look.", "Okay, let me look.", "One sec, looking at it.", "Let me see."];
         const phrase = phrases[Math.floor(Math.random() * phrases.length)];
         if (voice.isOn()) voice.say(phrase);
-        $("caption").textContent = "Looking at the page…";
+        $("caption").textContent = message.surface === "figma" ? "Looking at your Figma design…" : "Looking at the page…";
         $("caption").dataset.who = "agent";
         break;
       }

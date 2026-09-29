@@ -4,8 +4,9 @@ An AI UX/UI design partner that sits beside you while you work. It runs on
 **your own computer**, and it's free.
 
 > **Where we are:** you can **talk** to your design partner, it **talks back**,
-> it can **see the website open in Chrome**, and it **points** at what it's
-> talking about with its own orange arrow. Figma comes next. The full plan is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+> it can **see the website open in Chrome** and **your design in Figma**, and it
+> **points** at what it's talking about with its own orange arrow. Making changes
+> in Figma (only after you say yes) comes next. The full plan is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Talking to it
 
@@ -29,7 +30,20 @@ While it talks, its **orange arrow** moves to the heading, button or gap it's
 talking about, in time with its voice. The arrow is separate from your mouse,
 never blocks your clicks, and disappears a few seconds after it finishes.
 
-This needs the **Chrome add-on**, installed once (below). When it's connected,
+This needs the **Chrome add-on**, installed once (below).
+
+## Asking about your Figma design
+
+With a design open in **Figma Desktop** and the **Design Agent plugin** running,
+say things like **"Review this frame"**, **"Is this spacing correct?"**, **"Is
+this typography good?"** or **"How can I improve this section?"** It reads your
+real layers (auto-layout gaps and padding, text styles, colours, components)
+and a picture of the frame. Select a layer or frame to focus on it; with nothing
+selected it looks at the frames on screen. Its orange arrow appears on the
+canvas too. It doesn't change your design.
+
+It knows whether you mean the website or Figma from what you used last, or say
+"on the website" / "in Figma". When it's connected,
 the **Chrome** light in the helper window is green.
 
 ---
@@ -93,6 +107,21 @@ ask a question about it, and it sends it only to Design Agent on your computer
 Don't move or delete the design-agent folder afterwards: Chrome runs the add-on
 from there.
 
+### 6. Add the Figma plugin (once, about 2 minutes)
+
+1. Open **Figma Desktop** and open any design file.
+2. Click the **Figma menu** (top left) → **Plugins** → **Development** →
+   **Import plugin from manifest…**
+3. Go to your **design-agent** folder → **figma-plugin** → choose **manifest.json**.
+
+To start it in a file: **Plugins → Development → Design Agent** (or press
+**Ctrl + /** and type "Design Agent"). A small window says **Connected**, and the
+**Figma** light in the helper window turns green. Keep that small window open
+while you work.
+
+The orange arrow in Figma is a temporary, locked layer called "Design Agent
+pointer (temporary)". It removes itself; people in the file may see it briefly.
+
 ---
 
 ## Every day after that
@@ -125,6 +154,7 @@ and double-click **Start Design Agent** again.
 | The helper window didn't open | Open Edge or Chrome and go to **http://localhost:3456** |
 | The **Chrome** light stays grey | Check the add-on is on in **chrome://extensions**. Then close and reopen Chrome. |
 | "The Chrome add-on has an update" | Open **chrome://extensions** and click the reload arrow ↻ on Design Agent. |
+| The **Figma** light stays grey | In Figma, run **Plugins → Development → Design Agent**, and keep its small window open. |
 | "Couldn't look at the page" | Chrome doesn't let add-ons read its own pages (chrome://…) or the Chrome Web Store. Open a normal website. |
 
 Still stuck? Take a screenshot of the black window and the helper window and send it to me.

@@ -16,9 +16,13 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // appears, we look at the page right away instead of waiting for the AI to ask,
 // which saves a round trip and makes the answer faster.
 const ABOUT_SCREEN =
-  /\b(this|these|page|site|website|web ?site|screen|section|font|fonts|typeface|typography|colou?rs?|button|buttons|header|heading|headline|hero|layout|spacing|padding|margin|review|design|look|looks|image|images|photo|text|menu|nav|navigation|footer|cta|ux|ui|card|cards|form|contrast|hierarchy|alignment|grid|icon|icons|logo|screen ?shot)\b/i;
+  /\b(this|these|page|site|website|web ?site|screen|section|font|fonts|typeface|typography|colou?rs?|button|buttons|header|heading|headline|hero|layout|spacing|padding|margin|review|design|look|looks|image|images|photo|text|menu|nav|navigation|footer|cta|ux|ui|card|cards|form|contrast|hierarchy|alignment|grid|icon|icons|logo|screen ?shot|figma|frame|frames|layer|layers|component|components|variant|auto ?layout|artboard|mockup|wireframe)\b/i;
 
-const TOOLS = [
+// Words that say which one they mean.
+const MEANS_FIGMA = /\b(figma|frame|frames|layer|layers|component|components|variant|variants|auto ?layout|artboard|my design|mockup|wireframe)\b/i;
+const MEANS_WEB = /\b(website|web ?site|web ?page|site|browser|chrome|url|online|live page)\b/i;
+
+const WEB_TOOL =
   {
     name: "look_at_webpage",
     description:
@@ -26,8 +30,16 @@ const TOOLS = [
       "a list of visible elements (each with an id like w12, its text, position, size, font, colours, " +
       "contrast and spacing), the fonts the page loaded, and a screenshot of what the user sees. " +
       "Use it whenever the user asks about the page they are looking at and you don't have a fresh view of it.",
-  },
-];
+  };
+
+const FIGMA_TOOL = {
+  name: "look_at_figma",
+  description:
+    "Look at the design open in the user's Figma right now: their selection, or the frames on screen if nothing is selected. " +
+    "Returns the layer tree (each layer with an id like 12:34, its name, type, position and size, text and font, fills, " +
+    "styles and variables, auto-layout direction/gap/padding, component info) and a picture of it. " +
+    "Use it whenever the user asks about their Figma design and you don't have a fresh view of it.",
+};
 
 export function createAgent({ broadcast, parts }) {
   /** Conversation in Gemini's format: [{ role: "user" | "model", parts: [{ text }] }] */
@@ -48,7 +60,9 @@ export function createAgent({ broadcast, parts }) {
    * started arriving, it doesn't switch, so answers never get mixed up.
    */
   async function* streamTurn(contents) {
-    const tools = parts.connected("browser") ? TOOLS : [];
+    const tools = [];
+    if (parts.connected("browser")) tools.push(WEB_TOOL);
+    if (parts.connected("figma")) tools.push(FIGMA_TOOL);
     let lastError;
     for (const model of await ensureModels()) {
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -94,9 +108,32 @@ export function createAgent({ broadcast, parts }) {
     }
   }
 
+  /** Looks at Figma. Returns Gemini parts: the layer description and a picture. */
+  async function lookAtFigma() {
+    broadcast({ type: "looking", surface: "figma" });
+    try {
+      const design = await parts.call("figma", "figma.snapshot", {}, 20000);
+      const result = [{ text: design.text }];
+      if (design.screenshot) result.push({ inlineData: { mimeType: "image/jpeg", data: design.screenshot } });
+      console.log(`  Looked at Figma "${design.file}" (${design.count} layers${design.screenshot ? ", with picture" : ""})`);
+      return result;
+    } catch (error) {
+      return [{ text: `Couldn't look at Figma: ${error.message}` }];
+    }
+  }
+
+  /** Which one the user means: Chrome ("browser") or Figma. */
+  function surfaceFor(text) {
+    const web = parts.connected("browser");
+    const fig = parts.connected("figma");
+    if (fig && MEANS_FIGMA.test(text) && !MEANS_WEB.test(text)) return "figma";
+    if (web && MEANS_WEB.test(text) && !MEANS_FIGMA.test(text)) return "browser";
+    return parts.activeSurface();
+  }
+
   async function runTool(call) {
-    if (call.name === "look_at_webpage") {
-      const [description, ...images] = await lookAtWebpage();
+    if (call.name === "look_at_webpage" || call.name === "look_at_figma") {
+      const [description, ...images] = call.name === "look_at_figma" ? await lookAtFigma() : await lookAtWebpage();
       return { response: { result: description.text }, extra: images };
     }
     return { response: { error: `Unknown tool ${call.name}` }, extra: [] };
@@ -125,9 +162,11 @@ export function createAgent({ broadcast, parts }) {
     try {
       // OBSERVE: if the question is about the screen, look first.
       const userParts = [{ text }];
-      if (parts.connected("browser") && ABOUT_SCREEN.test(text)) {
-        const [description, ...images] = await lookAtWebpage();
-        userParts.push({ text: "[What the user is looking at right now]\n" + description.text }, ...images);
+      const surface = ABOUT_SCREEN.test(text) ? surfaceFor(text) : null;
+      if (surface) {
+        const [description, ...images] = surface === "figma" ? await lookAtFigma() : await lookAtWebpage();
+        const where = surface === "figma" ? "their Figma design" : "the web page in Chrome";
+        userParts.push({ text: `[What the user is looking at right now: ${where}]\n` + description.text }, ...images);
       }
       const contents = [...history, { role: "user", parts: userParts }];
 

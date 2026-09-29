@@ -51,8 +51,17 @@ function newestClient(role) {
   return [...clients[role]].pop();
 }
 
+// When you last did something in Chrome or in Figma, so "this" means the right one.
+const lastActivity = { browser: 0, figma: 0 };
+
 const parts = {
   connected: (role) => clients[role].size > 0,
+  /** "browser" or "figma": the connected one you used most recently (or null). */
+  activeSurface() {
+    const connected = ["browser", "figma"].filter((role) => clients[role].size > 0);
+    if (connected.length < 2) return connected[0] || null;
+    return lastActivity.figma > lastActivity.browser ? "figma" : "browser";
+  },
   /** Sends a request to a part (e.g. the Chrome add-on) and waits for its answer. */
   call(role, tool, args = {}, timeoutMs = 10000) {
     const socket = newestClient(role);
@@ -76,6 +85,23 @@ function finishCall(message) {
   clearTimeout(call.timer);
   if (message.ok) call.resolve(message.data);
   else call.reject(new Error(message.error || "it failed"));
+}
+
+// ---------- the pointer ----------
+// Web page elements have ids like "w12"; Figma layers have ids like "12:34".
+function pointAt(target) {
+  const log = (result) => result && result.ok === false && console.log(`  Pointer: ${result.reason}`);
+  if (/^w\d/.test(target)) {
+    if (!parts.connected("browser")) return;
+    parts.call("browser", "page.call", { file: "pointer.js", method: "show", args: [target] }, 5000).then(log).catch(() => {});
+  } else if (parts.connected("figma")) {
+    parts.call("figma", "figma.point", { target }, 5000).then(log).catch(() => {});
+  }
+}
+
+function clearPointers() {
+  if (parts.connected("browser")) parts.call("browser", "page.call", { file: "pointer.js", method: "hide", args: [] }, 5000).catch(() => {});
+  if (parts.connected("figma")) parts.call("figma", "figma.hide", {}, 5000).catch(() => {});
 }
 
 /** The add-on core version on disk. If the running add-on is older, it must be reloaded once. */
@@ -212,6 +238,7 @@ wss.on("connection", (socket) => {
           if (extensionNeedsReload) console.log("  The Chrome add-on has an update: reload it once in chrome://extensions.");
         }
         console.log(`  ${role === "browser" ? "Chrome add-on" : "Figma plugin"} connected.`);
+        lastActivity[role] = Date.now();
         broadcastStatus();
       }
       return;
@@ -219,6 +246,7 @@ wss.on("connection", (socket) => {
 
     if (role === "browser" || role === "figma") {
       if (message.type === "result") finishCall(message);
+      if (message.type === "event" && message.name === "activity") lastActivity[role] = Date.now();
       return;
     }
 
@@ -226,14 +254,8 @@ wss.on("connection", (socket) => {
       if (message.type === "chat") agent.handleUserText(message.text);
       if (message.type === "reset") agent.reset();
       // The helper window says when to move the pointer (in time with the voice).
-      if ((message.type === "point" || message.type === "point_clear") && parts.connected("browser")) {
-        const args = message.type === "point"
-          ? { file: "pointer.js", method: "show", args: [String(message.target || "")] }
-          : { file: "pointer.js", method: "hide", args: [] };
-        parts.call("browser", "page.call", args, 5000)
-          .then((result) => result && result.ok === false && console.log(`  Pointer: ${result.reason}`))
-          .catch(() => {});
-      }
+      if (message.type === "point") pointAt(String(message.target || ""));
+      if (message.type === "point_clear") clearPointers();
     }
   });
 
