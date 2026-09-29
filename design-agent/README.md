@@ -33,6 +33,23 @@ never blocks your clicks, and disappears a few seconds after it finishes.
 
 This needs the **Chrome add-on**, installed once (below).
 
+## Designing new screens and wireframes
+
+Say what you want, for example **"Create a wireframe for a mobile login screen"**,
+**"Design a pricing section for desktop"** or **"Sketch a dashboard"**.
+
+1. It plans the layout and shows an approval card, e.g. *Create a wireframe
+   "Login – mobile" (390 wide, 14 layers) to the right of "Homepage"*.
+2. Say **yes**: it builds it in Figma as a new frame with auto-layout (so it's
+   easy to edit), then describes what it made.
+3. Ask for changes ("make the button bigger", "add a sign-up link"), each after
+   your yes. **Undo** removes the whole new frame.
+
+"Wireframe", "sketch" or "low-fi" gives greyscale boxes; "design", "mockup" or
+"hi-fi" uses real colours and your file's own font. Mobile is 390 wide unless you
+say desktop (1440) or tablet (768). It never changes your existing layers when
+creating something new.
+
 ## Screenshots
 
 - Say **"Take a screenshot"** for exactly what's on screen, or **"Take a

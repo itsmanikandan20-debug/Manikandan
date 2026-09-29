@@ -6,7 +6,7 @@
 import { AiError, listChatModels, rankModels, streamChat } from "../ai/gemini.js";
 import { randomUUID } from "node:crypto";
 import { SYSTEM_PROMPT } from "./prompt.js";
-import { CHANGE_TOOL, classifyReply } from "./approvals.js";
+import { CHANGE_TOOL, DESIGN_TOOL, classifyReply } from "./approvals.js";
 
 const MAX_HISTORY = 40; // messages kept for context (always an even number: question + answer)
 const MAX_MODELS_TO_TRY = 4; // when Google is busy, try up to this many models
@@ -19,10 +19,12 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // appears, we look at the page right away instead of waiting for the AI to ask,
 // which saves a round trip and makes the answer faster.
 const ABOUT_SCREEN =
-  /\b(this|these|page|site|website|web ?site|screen|section|font|fonts|typeface|typography|colou?rs?|button|buttons|header|heading|headline|hero|layout|spacing|padding|margin|review|design|look|looks|image|images|photo|text|menu|nav|navigation|footer|cta|ux|ui|card|cards|form|contrast|hierarchy|alignment|grid|icon|icons|logo|screen ?shot|figma|frame|frames|layer|layers|component|components|variant|auto ?layout|artboard|mockup|wireframe)\b/i;
+  /\b(this|these|page|site|website|web ?site|screen|section|font|fonts|typeface|typography|colou?rs?|button|buttons|header|heading|headline|hero|layout|spacing|padding|margin|review|design|look|looks|image|images|photo|text|menu|nav|navigation|footer|cta|ux|ui|card|cards|form|contrast|hierarchy|alignment|grid|icon|icons|logo|screen ?shot|figma|frame|frames|layer|layers|component|components|variant|auto ?layout|artboard|mockup|wireframe|wireframes|sketch|screen|create|build|draw)\b/i;
 
 // Words that say which one they mean.
-const MEANS_FIGMA = /\b(figma|frame|frames|layer|layers|component|components|variant|variants|auto ?layout|artboard|my design|mockup|wireframe)\b/i;
+const MEANS_FIGMA = /\b(figma|frame|frames|layer|layers|component|components|variant|variants|auto ?layout|artboard|my design|mockup|wireframe|wireframes|sketch)\b/i;
+// "Create / design / draw a … screen / page / wireframe": a new design, made in Figma.
+const DESIGN_REQUEST = /\b(create|design|draw|sketch|wireframe|mock ?up|build|make|generate)\b.*\b(screen|screens|page|pages|wireframe|wireframes|website|app|section|layout|landing|dashboard|form|card|ui|mockup|hero|modal|onboarding|flow)\b/i;
 const MEANS_WEB = /\b(website|web ?site|web ?page|site|browser|chrome|url|online|live page)\b/i;
 
 const WEB_TOOL =
@@ -104,7 +106,7 @@ export function createAgent({ broadcast, parts, captures }) {
     const tools = [];
     if (parts.connected("browser")) tools.push(WEB_TOOL, SCREENSHOT_TOOL);
     tools.push(LIST_SCREENSHOTS_TOOL);
-    if (parts.connected("figma")) tools.push(FIGMA_TOOL, FIND_TOOL, GOTO_TOOL);
+    if (parts.connected("figma")) tools.push(FIGMA_TOOL, FIND_TOOL, GOTO_TOOL, DESIGN_TOOL);
     tools.push(CHANGE_TOOL, OPEN_FILE_TOOL); // changes can also be for a file that isn't open yet
     let lastError;
     for (const model of await ensureModels()) {
@@ -169,6 +171,7 @@ export function createAgent({ broadcast, parts, captures }) {
   function surfaceFor(text) {
     const web = parts.connected("browser");
     const fig = parts.connected("figma");
+    if (fig && DESIGN_REQUEST.test(text)) return "figma";
     if (fig && MEANS_FIGMA.test(text) && !MEANS_WEB.test(text)) return "figma";
     if (web && MEANS_WEB.test(text) && !MEANS_FIGMA.test(text)) return "browser";
     return parts.activeSurface();
@@ -281,6 +284,14 @@ export function createAgent({ broadcast, parts, captures }) {
       return { response: { result: description.text }, extra: images };
     }
     if (call.name === "propose_figma_changes") return { response: await propose(call.args || {}), extra: [] };
+    if (call.name === "propose_design") {
+      const args = call.args || {};
+      broadcast({ type: "notice", message: "Designing it…", quiet: true });
+      const design = { action: "create_design", ...args, style: args.style === "styled" ? "styled" : "wireframe" };
+      delete design.summary;
+      const summary = args.summary || `Create ${design.style === "styled" ? "a design" : "a wireframe"}: ${args.name || "new screen"}`;
+      return { response: await propose({ summary, changes: [design] }), extra: [] };
+    }
     if (call.name === "take_screenshot") return { response: await takeScreenshot(Boolean((call.args || {}).full_page)), extra: [] };
     if (call.name === "list_screenshots") {
       const open = parts.figmaFile();
@@ -453,7 +464,7 @@ export function createAgent({ broadcast, parts, captures }) {
       return;
     }
     // Asking about Figma while the plugin isn't running: start it first (Windows).
-    if (!parts.connected("figma") && MEANS_FIGMA.test(text) && parts.ensureFigma) {
+    if (!parts.connected("figma") && (MEANS_FIGMA.test(text) || DESIGN_REQUEST.test(text)) && parts.ensureFigma) {
       broadcast({ type: "notice", message: "Starting the Design Agent plugin in Figma…", quiet: true });
       await parts.ensureFigma();
     }

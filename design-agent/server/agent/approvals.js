@@ -93,3 +93,57 @@ export function classifyReply(text) {
   if (YES.test(t) && !NEGATION.test(t)) return "yes";
   return null;
 }
+
+/** The tool the AI uses to design new screens or wireframes. Also only a proposal. */
+export const DESIGN_TOOL = {
+  name: "propose_design",
+  description:
+    "Design a new screen, section or wireframe in the user's Figma file. NOTHING is created until the user approves. " +
+    "Describe it as a flat list of layers: the first layer with no parent is the top frame; every other layer names its parent by key. " +
+    "Frames are auto-layout containers. It's placed to the right of the frame they're looking at.",
+  parameters: {
+    type: "object",
+    properties: {
+      name: { type: "string", description: 'Frame name, e.g. "Login – mobile"' },
+      summary: { type: "string", description: 'Short sentence for the approval card, e.g. "Create a login screen wireframe"' },
+      style: { type: "string", enum: ["wireframe", "styled"], description: "wireframe = greyscale boxes; styled = real colours and fonts" },
+      width: { type: "number", description: "Top frame width: 390 for mobile, 1440 for desktop, 768 for tablet" },
+      min_height: { type: "number", description: "Optional: at least this tall (e.g. 844 for a mobile screen)" },
+      font_family: { type: "string", description: "Styled only: font family (default: the file's own)" },
+      near_id: { type: "string", description: "Optional: place it beside this layer's top frame" },
+      nodes: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            key: { type: "string", description: "Unique short key, e.g. header, title, cta" },
+            parent: { type: "string", description: "Key of the parent frame (empty for the top frame)" },
+            type: { type: "string", enum: ["frame", "text", "rect", "image", "button", "input", "icon", "divider"] },
+            name: { type: "string", description: "Layer name" },
+            text: { type: "string", description: "Text, button label, input placeholder or image label. Use realistic copy, not lorem ipsum." },
+            direction: { type: "string", enum: ["vertical", "horizontal"], description: "Frames: stack direction (default vertical)" },
+            gap: { type: "number" },
+            padding: { type: "number" },
+            padding_x: { type: "number" },
+            padding_y: { type: "number" },
+            align: { type: "string", enum: ["start", "center", "end", "space_between"], description: "Frames: along the stack direction" },
+            cross_align: { type: "string", enum: ["start", "center", "end"], description: "Frames: across the stack direction" },
+            width: { type: "number", description: "Fixed width in px" },
+            height: { type: "number", description: "Fixed height in px" },
+            fill_width: { type: "boolean", description: "Stretch to the parent's width" },
+            fill_height: { type: "boolean" },
+            fill: { type: "string", description: "Background colour hex" },
+            text_color: { type: "string" },
+            font_size: { type: "number" },
+            font_weight: { type: "string", enum: ["regular", "medium", "semibold", "bold"] },
+            text_align: { type: "string", enum: ["left", "center", "right"] },
+            radius: { type: "number" },
+            stroke: { type: "string", description: "Border colour hex" },
+          },
+          required: ["key", "type"],
+        },
+      },
+    },
+    required: ["name", "nodes"],
+  },
+};

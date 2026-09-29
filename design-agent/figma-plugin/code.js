@@ -444,6 +444,13 @@ async function anchorFor(c) {
 const SIDES = ["right", "left", "below", "above"];
 
 async function describeChange(c) {
+  if (c.action === "create_design") {
+    const problem = checkDesign(c);
+    if (problem) throw new Error(problem);
+    const anchor = await anchorFor(c);
+    const where = anchor ? `to the right of "${anchor.name}"` : "in the middle of your view";
+    return `Create ${c.style === "styled" ? "a styled design" : "a wireframe"} "${c.name}" (${round(c.width || 1440)} wide, ${c.nodes.length} layers) ${where}`;
+  }
   if (c.action === "place_screenshot") {
     if (!c.capture) throw new Error("that screenshot wasn't found");
     const anchor = await anchorFor(c);
@@ -564,6 +571,11 @@ async function applyOne(c, record) {
     record.push({ kind: "ungroup", id: group.id });
     return group;
   }
+  if (c.action === "create_design") {
+    const root = await buildDesign(c);
+    record.push({ kind: "remove", id: root.id });
+    return root;
+  }
   if (c.action === "place_screenshot") {
     const frame = await placeScreenshot(c);
     record.push({ kind: "remove", id: frame.id });
@@ -668,7 +680,7 @@ async function apply(changes) {
     try {
       const node = await applyOne(c, record);
       if (node) touched.push(node);
-      const created = ["place_screenshot", "duplicate", "group"].includes(c.action) && node ? node.id : undefined;
+      const created = ["place_screenshot", "duplicate", "group", "create_design"].includes(c.action) && node ? node.id : undefined;
       results.push({ ok: true, change: c.action, id: c.id || (c.ids || []).join(",") || c.capture_id, created, capture_id: c.capture_id, page: figma.currentPage.name });
     } catch (error) {
       results.push({ ok: false, change: c.action, id: c.id || (c.ids || []).join(","), error: error.message });
@@ -710,6 +722,256 @@ function spotNextTo(anchor, box, side, gap) {
 }
 function topFrameBox(node) {
   return node.absoluteBoundingBox;
+}
+
+// ---------- creating new designs and wireframes ----------
+const DESIGN_TYPES = ["frame", "text", "rect", "image", "button", "input", "icon", "divider"];
+const MAX_DESIGN_NODES = 150;
+
+/** Checks a design plan (a flat list of nodes, each pointing at its parent by key). */
+function checkDesign(c) {
+  const nodes = Array.isArray(c.nodes) ? c.nodes : [];
+  if (!nodes.length) return "the design has no layers";
+  if (nodes.length > MAX_DESIGN_NODES) return `too many layers (${nodes.length}; the limit is ${MAX_DESIGN_NODES})`;
+  const keys = new Set();
+  for (const n of nodes) {
+    if (!n.key) return "every layer needs a key";
+    if (keys.has(n.key)) return `the key "${n.key}" is used twice`;
+    keys.add(n.key);
+    if (!DESIGN_TYPES.includes(n.type)) return `unknown layer type "${n.type}"`;
+  }
+  for (const n of nodes) if (n.parent && !keys.has(n.parent)) return `"${n.key}" points to a missing parent "${n.parent}"`;
+  return "";
+}
+
+/** Wireframes are greyscale: any colour becomes a grey of similar lightness. */
+function greyOf(hex, fallback) {
+  const c = parseHex(hex);
+  if (!c) return fallback;
+  const l = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+  return { r: l, g: l, b: l };
+}
+
+const WEIGHTS = { regular: "Regular", medium: "Medium", semibold: "Semi Bold", bold: "Bold" };
+async function fontFor(family, weight) {
+  const style = WEIGHTS[weight] || "Regular";
+  for (const font of [{ family, style }, { family, style: "Regular" }, { family: "Inter", style }, { family: "Inter", style: "Regular" }]) {
+    try {
+      await figma.loadFontAsync(font);
+      return font;
+    } catch (e) {
+      // try the next one
+    }
+  }
+  throw new Error("no usable font (Inter isn't available)");
+}
+
+/** The main font of this file (from its text styles), for styled designs. */
+async function fileFontFamily() {
+  try {
+    const styles = await figma.getLocalTextStylesAsync();
+    if (styles.length) return styles[0].fontName.family;
+  } catch (e) {
+    // ignore
+  }
+  return "Inter";
+}
+
+const ALIGN = { start: "MIN", center: "CENTER", end: "MAX", space_between: "SPACE_BETWEEN" };
+const CROSS = { start: "MIN", center: "CENTER", end: "MAX" };
+
+async function buildDesign(c) {
+  const problem = checkDesign(c);
+  if (problem) throw new Error(problem);
+  const wire = c.style !== "styled";
+  const family = wire ? "Inter" : c.font_family || (await fileFontFamily());
+  const anchor = await anchorFor(c); // decide where it goes before adding anything
+  const color = (hex, wireDefault, styledDefault) =>
+    wire ? greyOf(hex, wireDefault) : parseHex(hex) || styledDefault;
+
+  const byKey = new Map();
+  const spec = new Map(c.nodes.map((n) => [n.key, n]));
+  const children = new Map();
+  let rootSpec = null;
+  for (const n of c.nodes) {
+    if (!n.parent) {
+      if (!rootSpec) rootSpec = n;
+      else n.parent = rootSpec.key; // only one top frame; others go inside it
+    }
+    if (n.parent) {
+      if (!children.has(n.parent)) children.set(n.parent, []);
+      children.get(n.parent).push(n);
+    }
+  }
+  if (!rootSpec) rootSpec = c.nodes[0];
+
+  function autoLayout(frame, n, defaultDirection) {
+    frame.layoutMode = n.direction === "horizontal" ? "HORIZONTAL" : n.direction === "vertical" ? "VERTICAL" : defaultDirection;
+    frame.itemSpacing = n.gap !== undefined ? Number(n.gap) : 0;
+    const px = n.padding_x !== undefined ? n.padding_x : n.padding !== undefined ? n.padding : 0;
+    const py = n.padding_y !== undefined ? n.padding_y : n.padding !== undefined ? n.padding : 0;
+    frame.paddingLeft = frame.paddingRight = Number(px);
+    frame.paddingTop = frame.paddingBottom = Number(py);
+    frame.primaryAxisAlignItems = ALIGN[n.align] || "MIN";
+    frame.counterAxisAlignItems = CROSS[n.cross_align] || "MIN";
+    frame.fills = [];
+  }
+
+  async function text(n, fallbackColor, size) {
+    const t = figma.createText();
+    t.fontName = await fontFor(family, n.font_weight);
+    t.characters = String(n.text || n.name || "Text");
+    t.fontSize = Number(n.font_size) || size;
+    t.fills = [{ type: "SOLID", color: color(n.text_color, fallbackColor, fallbackColor) }];
+    if (n.text_align) t.textAlignHorizontal = n.text_align === "center" ? "CENTER" : n.text_align === "right" ? "RIGHT" : "LEFT";
+    return t;
+  }
+
+  async function create(n) {
+    let node;
+    switch (n.type) {
+      case "frame":
+        node = figma.createFrame();
+        autoLayout(node, n, "VERTICAL");
+        if (n.fill) node.fills = [{ type: "SOLID", color: color(n.fill, { r: 0.96, g: 0.96, b: 0.96 }, WHITE) }];
+        break;
+      case "text":
+        node = await text(n, n.font_size >= 24 ? { r: 0.1, g: 0.1, b: 0.1 } : { r: 0.25, g: 0.25, b: 0.25 }, 16);
+        break;
+      case "button": {
+        node = figma.createFrame();
+        autoLayout(node, { ...n, direction: "horizontal", align: "center", cross_align: "center" }, "HORIZONTAL");
+        node.paddingLeft = node.paddingRight = n.padding_x !== undefined ? Number(n.padding_x) : 20;
+        node.paddingTop = node.paddingBottom = n.padding_y !== undefined ? Number(n.padding_y) : 12;
+        node.cornerRadius = n.radius !== undefined ? Number(n.radius) : 8;
+        const bg = color(n.fill, { r: 0.24, g: 0.24, b: 0.24 }, { r: 0.1, g: 0.1, b: 0.1 });
+        node.fills = [{ type: "SOLID", color: bg }];
+        const light = luminance(bg) < 0.4;
+        const label = await text({ ...n, text: n.text || "Button", font_weight: n.font_weight || "semibold", text_color: n.text_color || (light ? "#FFFFFF" : "#111111") }, light ? WHITE : { r: 0.07, g: 0.07, b: 0.07 }, 16);
+        label.name = "Label";
+        node.appendChild(label);
+        break;
+      }
+      case "input": {
+        node = figma.createFrame();
+        autoLayout(node, { ...n, direction: "horizontal", cross_align: "center" }, "HORIZONTAL");
+        node.paddingLeft = node.paddingRight = 14;
+        node.paddingTop = node.paddingBottom = 12;
+        node.cornerRadius = n.radius !== undefined ? Number(n.radius) : 8;
+        node.fills = [{ type: "SOLID", color: WHITE }];
+        node.strokes = [{ type: "SOLID", color: color(n.stroke, { r: 0.75, g: 0.75, b: 0.75 }, { r: 0.8, g: 0.8, b: 0.8 }) }];
+        node.strokeWeight = 1;
+        const placeholder = await text({ ...n, text: n.text || "Placeholder", text_color: n.text_color || "#8A8A8A" }, { r: 0.54, g: 0.54, b: 0.54 }, 16);
+        placeholder.name = "Placeholder";
+        node.appendChild(placeholder);
+        if (n.fill_width === undefined) n.fill_width = true;
+        break;
+      }
+      case "image": {
+        node = figma.createFrame();
+        autoLayout(node, { direction: "vertical", align: "center", cross_align: "center" }, "VERTICAL");
+        node.fills = [{ type: "SOLID", color: wire ? { r: 0.85, g: 0.85, b: 0.85 } : parseHex(n.fill) || { r: 0.9, g: 0.9, b: 0.92 } }];
+        node.cornerRadius = n.radius !== undefined ? Number(n.radius) : 8;
+        const label = await text({ text: n.text || "Image", font_size: 14, text_color: "#7A7A7A" }, { r: 0.48, g: 0.48, b: 0.48 }, 14);
+        label.name = "Label";
+        node.appendChild(label);
+        break;
+      }
+      case "icon":
+        node = figma.createEllipse();
+        node.resize(Number(n.width) || 24, Number(n.height) || Number(n.width) || 24);
+        node.fills = [{ type: "SOLID", color: color(n.fill, { r: 0.7, g: 0.7, b: 0.7 }, { r: 0.6, g: 0.6, b: 0.65 }) }];
+        break;
+      case "divider":
+        node = figma.createRectangle();
+        node.resize(Number(n.width) || 100, 1);
+        node.fills = [{ type: "SOLID", color: color(n.fill, { r: 0.88, g: 0.88, b: 0.88 }, { r: 0.9, g: 0.9, b: 0.9 }) }];
+        if (n.fill_width === undefined) n.fill_width = true;
+        break;
+      default: // rect
+        node = figma.createRectangle();
+        node.resize(Number(n.width) || 100, Number(n.height) || 100);
+        node.fills = [{ type: "SOLID", color: color(n.fill, { r: 0.85, g: 0.85, b: 0.85 }, { r: 0.9, g: 0.9, b: 0.9 }) }];
+    }
+    // Readable layer names: the given name, else the text (for text, buttons, inputs), else the key.
+    node.name = n.name || (["text", "button", "input", "image"].includes(n.type) && n.text) || n.key || n.type;
+    if (n.radius !== undefined && "cornerRadius" in node && n.type !== "button" && n.type !== "input") node.cornerRadius = Number(n.radius);
+    if (n.stroke && n.type !== "input" && "strokes" in node) {
+      node.strokes = [{ type: "SOLID", color: color(n.stroke, { r: 0.75, g: 0.75, b: 0.75 }, { r: 0.8, g: 0.8, b: 0.8 }) }];
+      node.strokeWeight = 1;
+    }
+    return node;
+  }
+
+  /** Sizes a node once it's inside its parent (fill / hug / fixed). */
+  function size(node, n, parentNode) {
+    const inAuto = parentNode && "layoutMode" in parentNode && parentNode.layoutMode !== "NONE";
+    const parentVertical = inAuto && parentNode.layoutMode === "VERTICAL";
+    const isText = node.type === "TEXT";
+    const canHug = isText || ("layoutMode" in node && node.layoutMode !== "NONE");
+    // Width
+    if (n.width !== undefined && !n.fill_width) {
+      if (canHug || inAuto) node.layoutSizingHorizontal = "FIXED";
+      node.resize(Number(n.width), node.height);
+    } else if (inAuto && (n.fill_width || (parentVertical && ["frame", "input", "divider", "image"].includes(n.type)) || (parentVertical && isText))) {
+      node.layoutSizingHorizontal = "FILL";
+    } else if (canHug) {
+      node.layoutSizingHorizontal = "HUG";
+    }
+    // Height
+    if (n.height !== undefined && !n.fill_height) {
+      if (canHug || inAuto) node.layoutSizingVertical = "FIXED";
+      node.resize(node.width, Number(n.height));
+    } else if (inAuto && n.fill_height) {
+      node.layoutSizingVertical = "FILL";
+    } else if (canHug) {
+      node.layoutSizingVertical = "HUG";
+    }
+    if (n.type === "image" && n.height === undefined) {
+      node.layoutSizingVertical = "FIXED";
+      node.resize(node.width, 200);
+    }
+  }
+
+  // Build top-down: the top frame first, then each layer inside its parent.
+  const root = await create({ ...rootSpec, type: "frame" });
+  root.name = c.name || rootSpec.name || "New design";
+  if (!rootSpec.fill) root.fills = [{ type: "SOLID", color: WHITE }];
+  root.layoutSizingHorizontal = "FIXED";
+  root.resize(Number(c.width || rootSpec.width) || 1440, 100);
+  root.layoutSizingVertical = "HUG";
+  byKey.set(rootSpec.key, root);
+
+  const queue = [rootSpec.key];
+  while (queue.length) {
+    const parentKey = queue.shift();
+    const parentNode = byKey.get(parentKey);
+    for (const n of children.get(parentKey) || []) {
+      const node = await create(n);
+      if ("appendChild" in parentNode) parentNode.appendChild(node);
+      try {
+        size(node, n, parentNode);
+      } catch (e) {
+        // sizing is best-effort; the layer still exists
+      }
+      byKey.set(n.key, node);
+      if (spec.get(n.key) && children.has(n.key) && "appendChild" in node) queue.push(n.key);
+    }
+  }
+  const minHeight = Number(c.min_height || rootSpec.height) || 0;
+  if (minHeight && root.height < minHeight) {
+    root.layoutSizingVertical = "FIXED";
+    root.resize(root.width, minHeight);
+  }
+
+  const box = { x: 0, y: 0, width: root.width, height: root.height };
+  const spot = anchor
+    ? spotNextTo(anchor.absoluteBoundingBox, box, "right", 100)
+    : { x: figma.viewport.center.x - root.width / 2, y: figma.viewport.center.y - Math.min(root.height, 800) / 2 };
+  root.x = spot.x;
+  root.y = spot.y;
+  figma.viewport.scrollAndZoomIntoView([root]);
+  return root;
 }
 
 /** Adds a screenshot as a frame of stacked image slices (Figma images max out at 4096 px). */
