@@ -81,9 +81,23 @@
     select.innerHTML = "";
     const auto = new Option("Automatic (best available)", "");
     select.add(auto);
-    list.forEach((v) => select.add(new Option(`${v.name} (${v.lang})`, v.name)));
+    // Human-sounding "Natural" voices first in the list.
+    const natural = list.filter((v) => /natural/i.test(v.name));
+    const others = list.filter((v) => !/natural/i.test(v.name));
+    natural.concat(others).forEach((v) => select.add(new Option(`${v.name} (${v.lang})`, v.name)));
     select.value = voice.settings.voice || "";
+
+    const hint = $("voice-hint");
+    if (!list.length) hint.textContent = "";
+    else if (voice.hasNaturalVoice()) hint.textContent = "Using: " + voice.currentVoiceName();
+    else {
+      hint.textContent = "For a much more human voice, open Design Agent in Microsoft Edge: it has free \"Natural\" voices. " +
+        "Close this window and start Design Agent again; it opens in Edge automatically.";
+      if (!hintShown) showProblem(hint.textContent);
+      hintShown = true;
+    }
   }
+  let hintShown = false;
   if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = fillVoices;
   fillVoices();
 
@@ -92,8 +106,14 @@
   $("set-rate").value = voice.settings.rate;
   $("rate-value").textContent = Number(voice.settings.rate).toFixed(2) + "×";
 
-  $("set-lang").addEventListener("change", (e) => voice.saveSettings({ lang: e.target.value }));
-  $("set-voice").addEventListener("change", (e) => voice.saveSettings({ voice: e.target.value }));
+  $("set-lang").addEventListener("change", (e) => {
+    voice.saveSettings({ lang: e.target.value });
+    fillVoices();
+  });
+  $("set-voice").addEventListener("change", (e) => {
+    voice.saveSettings({ voice: e.target.value });
+    fillVoices();
+  });
   $("set-rate").addEventListener("input", (e) => {
     voice.saveSettings({ rate: Number(e.target.value) });
     $("rate-value").textContent = Number(e.target.value).toFixed(2) + "×";

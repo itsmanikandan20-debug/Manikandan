@@ -57,18 +57,27 @@
       return window.speechSynthesis.getVoices().filter((v) => v.lang && v.lang.toLowerCase().startsWith("en"));
     }
 
+    // Most human-sounding first: Edge's "Natural" voices, then Chrome's Google voices,
+    // then the older Windows voices (David, Zira, Mark), which sound robotic.
     function pickVoice() {
       const all = voices();
       if (!all.length) return null;
+      const natural = (v) => /natural/i.test(v.name);
+      const sameLang = (v) => v.lang.toLowerCase() === String(settings.lang).toLowerCase();
       return (
         all.find((v) => v.name === settings.voice) ||
-        all.find((v) => /natural/i.test(v.name) && v.lang === settings.lang) ||
-        all.find((v) => /google/i.test(v.name) && v.lang === settings.lang) ||
-        all.find((v) => v.lang === settings.lang) ||
-        all.find((v) => /natural/i.test(v.name)) ||
+        all.find((v) => natural(v) && sameLang(v)) ||
+        all.find((v) => natural(v) && /^(Microsoft (Ava|Andrew|Emma|Brian|Jenny|Aria|Guy))\b/i.test(v.name)) ||
+        all.find(natural) ||
+        all.find((v) => /google/i.test(v.name) && sameLang(v)) ||
         all.find((v) => /google/i.test(v.name)) ||
+        all.find(sameLang) ||
         all[0]
       );
+    }
+
+    function hasNaturalVoice() {
+      return voices().some((v) => /natural/i.test(v.name));
     }
 
     // ---------- listening ----------
@@ -109,7 +118,8 @@
             finalText = "";
             return; // that was our own voice coming back through the speakers
           }
-          if (words(heard).length < 2) return;
+          const isFinal = Boolean(finalText.trim()) && !interim;
+          if (words(heard).length < 2 && !isFinal) return; // wait until a short word is certain
           stopSpeaking(); // you started talking: stop and listen
         }
 
@@ -193,6 +203,21 @@
       echoUntil = Date.now() + 600;
     }
 
+    // Safety net: Chrome sometimes never reports that it finished speaking.
+    // If nothing is actually playing, stop waiting for it, so listening never gets stuck.
+    setInterval(() => {
+      if (!window.speechSynthesis) return;
+      if (pending > 0 && !window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
+        pending = 0;
+        utterances.length = 0;
+        speaking = false;
+        echoUntil = Date.now() + 800;
+        setState(active ? "listening" : "off");
+      }
+      // Chrome can get stuck "paused" after the window was in the background.
+      if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+    }, 1000);
+
     // ---------- start / stop ----------
     function start() {
       if (!supported) {
@@ -226,6 +251,8 @@
       supported,
       settings,
       voices,
+      hasNaturalVoice,
+      currentVoiceName: () => (pickVoice() || {}).name || "",
       isOn: () => active,
       start,
       stop,

@@ -6,9 +6,10 @@ import path from "node:path";
 function findBrowser() {
   if (process.platform !== "win32") return null;
   const roots = [process.env.PROGRAMFILES, process.env["PROGRAMFILES(X86)"], process.env.LOCALAPPDATA].filter(Boolean);
+  // Edge first: it has free "Natural" voices that sound far more human than Chrome's.
   const exes = [
-    ["Google", "Chrome", "Application", "chrome.exe"],
     ["Microsoft", "Edge", "Application", "msedge.exe"],
+    ["Google", "Chrome", "Application", "chrome.exe"],
   ];
   for (const exe of exes) {
     for (const root of roots) {
