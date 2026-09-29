@@ -8,7 +8,7 @@
     "node": ">=18.17.0"
   },
   "scripts": {
-    "start": "node server/index.js --open",
+    "start": "node server/launch.js --open",
     "dev": "node --watch server/index.js"
   },
   "dependencies": {

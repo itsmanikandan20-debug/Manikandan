@@ -12,34 +12,30 @@ An AI UX/UI design partner that sits beside you while you work. It runs on
 
 ## First-time setup on Windows (about 10 minutes, only once)
 
-You need **Node.js**, **Git** and **VS Code**. You already have all three.
+You only need **Node.js** (https://nodejs.org, the LTS version). No Git or VS Code needed.
 
 ### 1. Get the project onto your computer
 
-1. Open **VS Code**.
-2. At the top, click **Terminal → New Terminal**. A panel opens at the bottom.
-3. Copy these 3 lines, paste them into the terminal, and press **Enter**:
+You only do this once. After that, Design Agent **updates itself** every time you start it.
 
-   ```
-   cd $HOME
-   git clone https://github.com/itsmanikandan20-debug/Manikandan.git
-   cd Manikandan; git checkout claude/gallant-shannon-egv9lb; explorer design-agent
-   ```
-
-   A folder window opens: this is the **design-agent** folder. It lives in
-   `C:\Users\<your name>\Manikandan\design-agent`.
+1. Open this link in Chrome. A ZIP file downloads:
+   https://github.com/itsmanikandan20-debug/Manikandan/archive/refs/heads/claude/gallant-shannon-egv9lb.zip
+2. Open your **Downloads** folder, **right-click** the ZIP → **Extract All…** → **Extract**.
+3. Open the new folder (and the folder with the same name inside it, if there is one),
+   then open **design-agent**.
 
 ### 2. Start Design Agent
 
-1. In the **design-agent** folder window that opened,
-   double-click **Start Design Agent** (the file may show as `Start Design Agent.bat`).
+1. In the **design-agent** folder, double-click **Start Design Agent** (the file may show as `Start Design Agent.bat`).
 2. A black window opens. **The first time only**, it installs things for about a minute.
 3. The **helper window** opens by itself.
 
 > Keep the black window open while you work. Closing it stops Design Agent.
 >
-> If Windows shows a blue **"Windows protected your PC"** box, click
-> **More info → Run anyway**. It shows this for any new file you download.
+> If Windows shows **"The publisher could not be verified"** or **"Windows
+> protected your PC"**, click **Run** (or **More info → Run anyway**). Windows
+> shows this for any file downloaded from the internet. Untick **"Always ask
+> before opening this file"** so it doesn't ask again.
 
 ### 3. Add your free AI key (only once)
 
@@ -66,14 +62,13 @@ so you can start it from your Desktop.
 
 ## Getting the newest version (after each new step)
 
-In the VS Code terminal:
+Nothing to do. Every time you double-click **Start Design Agent**, it checks for
+the newest version and downloads it by itself. You'll see
+**"Checking for updates…"** in the black window. Your key and screenshots are
+kept.
 
-```
-cd $HOME\Manikandan
-git pull
-```
-
-Then close the black window and double-click **Start Design Agent** again.
+If a new step is ready while Design Agent is running, close the black window
+and double-click **Start Design Agent** again.
 
 ---
 

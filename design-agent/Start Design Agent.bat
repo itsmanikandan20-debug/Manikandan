@@ -2,7 +2,7 @@
 title Design Agent
 cd /d "%~dp0"
 
-where node >/dev/null 2>nul
+where node >nul 2>nul
 if errorlevel 1 (
   echo.
   echo  Node.js is not installed. Download the LTS version from https://nodejs.org
@@ -25,7 +25,7 @@ if not exist "node_modules\ws" (
   )
 )
 
-node server\index.js --open
+node server\launch.js --open
 echo.
 echo  Design Agent stopped.
 pause
