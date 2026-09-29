@@ -4,15 +4,39 @@
 // snapshot.js, which is read fresh each time, so it updates without reloading the add-on.
 
 const SERVER = "ws://localhost:3456/ws";
+const STATUS_URL = "http://localhost:3456/api/status";
 // Raise this whenever background.js or manifest.json change, so the helper can ask
 // you to reload the add-on once (Chrome only picks up those two files on reload).
-const CORE_VERSION = 2;
+const CORE_VERSION = 3;
 let socket = null;
 let pingTimer = null;
+let checking = false;
+let retryTimer = null;
+
+function retrySoon() {
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(connect, 3000);
+}
 
 // ---------- connection ----------
-function connect() {
+async function connect() {
+  if (checking) return;
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+
+  // Check quietly whether Design Agent is running before connecting. A failed
+  // WebSocket shows up as a red "Errors" button in chrome://extensions; a failed
+  // check like this one doesn't.
+  checking = true;
+  try {
+    await fetch(STATUS_URL, { cache: "no-store" });
+  } catch {
+    checking = false;
+    retrySoon(); // not running yet; try again in a moment
+    return;
+  }
+  checking = false;
+  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+
   try {
     socket = new WebSocket(SERVER);
   } catch {
@@ -36,7 +60,7 @@ function connect() {
   socket.onclose = () => {
     clearInterval(pingTimer);
     socket = null;
-    setTimeout(connect, 3000); // Design Agent isn't running yet; keep trying quietly
+    retrySoon(); // Design Agent stopped; keep checking quietly
   };
   socket.onerror = () => {};
 }
