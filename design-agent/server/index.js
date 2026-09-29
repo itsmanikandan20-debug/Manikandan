@@ -66,9 +66,15 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === "/api/key" && req.method === "POST") {
     try {
       const { key } = await readJson(req);
-      const clean = String(key || "").trim();
-      if (!/^[\w-]{20,}$/.test(clean)) {
-        return json(res, 400, { ok: false, error: "That doesn't look like a Gemini key. It usually starts with \"AIza\"." });
+      // Remove spaces, line breaks and quotes that often come along when copying.
+      const clean = String(key || "").replace(/[\s"'`]/g, "");
+      if (clean.length < 20) {
+        return json(res, 400, {
+          ok: false,
+          error: clean
+            ? `That's too short to be a key (${clean.length} characters). A Gemini key is about 39 characters and usually starts with "AIza".`
+            : "Paste your key in the box first.",
+        });
       }
       const model = process.env.GEMINI_MODEL || pickModel(await listChatModels(clean));
       saveEnvValue(ENV_FILE, "GEMINI_API_KEY", clean);
