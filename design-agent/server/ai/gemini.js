@@ -3,8 +3,17 @@
 
 const BASE_URL = process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta";
 
-/** A friendly error the helper window can show as-is. */
-export class AiError extends Error {}
+/**
+ * A friendly error the helper window can show as-is.
+ * "retryable" means trying again, or with another model, may work (busy, limit, missing model).
+ */
+export class AiError extends Error {
+  constructor(message, { status = 0, retryable = false } = {}) {
+    super(message);
+    this.status = status;
+    this.retryable = retryable;
+  }
+}
 
 async function request(path, key, options = {}) {
   let response;
@@ -25,13 +34,17 @@ async function request(path, key, options = {}) {
   if (response.status === 403) {
     throw new AiError("Google refused this key. Make sure you copied the whole key from aistudio.google.com/apikey.");
   }
-  if (response.status === 429) {
-    throw new AiError("The free Gemini limit was reached. Wait a minute and try again.");
+  const status = response.status;
+  if (status === 429) {
+    throw new AiError("The free Gemini limit was reached. Wait a minute and try again.", { status, retryable: true });
   }
-  if (response.status === 404) {
-    throw new AiError("That Gemini model isn't available. Clear GEMINI_MODEL in the .env file to pick one automatically.");
+  if (status === 404) {
+    throw new AiError("That Gemini model isn't available right now.", { status, retryable: true });
   }
-  throw new AiError(`Google's AI service returned an error (${response.status}). Try again in a moment.`);
+  if (status >= 500) {
+    throw new AiError("Google's free AI is very busy right now. Wait a moment and try again.", { status, retryable: true });
+  }
+  throw new AiError(`Google's AI service returned an error (${status}). Try again in a moment.`, { status });
 }
 
 /** Lists models this key may use for chat. */
@@ -52,22 +65,36 @@ export async function listChatModels(key) {
 }
 
 /**
- * Picks the newest general-purpose "flash" model (fast, and free on the free tier).
- * Model names change over time, so we choose from what Google says is available.
+ * Orders the available models from best to backup. The newest general-purpose
+ * "flash" models come first (fast, and free on the free tier), then "flash-lite"
+ * models as backups for when Google is busy. Model names change over time, so we
+ * choose from what Google says is available instead of hard-coding one.
  */
-export function pickModel(names) {
-  const special = /(lite|tts|image|live|audio|embed|thinking|exp|learnlm|robotics|computer)/i;
-  const candidates = names
+export function rankModels(names) {
+  const special = /(tts|image|live|audio|embed|thinking|exp|learnlm|robotics|computer)/i;
+  const ranked = names
     .map((name) => ({ name, match: name.match(/^gemini-(\d+(?:\.\d+)?)-flash(.*)$/) }))
     .filter(({ name, match }) => match && !special.test(name))
-    .map(({ name, match }) => ({ name, version: Number(match[1]), preview: /preview/.test(match[2]), extra: match[2] }));
-  if (!candidates.length) return names.find((name) => /flash/.test(name)) || names[0];
+    .map(({ name, match }) => ({
+      name,
+      version: Number(match[1]),
+      lite: /lite/.test(match[2]),
+      preview: /preview/.test(match[2]),
+      extra: match[2],
+    }))
+    .sort((a, b) =>
+      a.lite - b.lite ||                 // full flash before lite
+      a.preview - b.preview ||           // stable before preview
+      b.version - a.version ||           // newest version first
+      a.extra.length - b.extra.length)   // "gemini-X-flash" before dated variants
+    .map((m) => m.name);
+  if (ranked.length) return ranked;
+  const flash = names.filter((name) => /flash/.test(name));
+  return flash.length ? flash : names.slice(0, 1);
+}
 
-  candidates.sort((a, b) =>
-    a.preview - b.preview ||           // stable before preview
-    b.version - a.version ||           // newest version first
-    a.extra.length - b.extra.length);  // "gemini-X-flash" before dated variants
-  return candidates[0].name;
+export function pickModel(names) {
+  return rankModels(names)[0];
 }
 
 /**
