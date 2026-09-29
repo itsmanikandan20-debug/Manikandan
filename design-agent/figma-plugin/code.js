@@ -5,7 +5,9 @@
 // - Applies changes to your design ONLY when Design Agent sends ones you approved
 //   (the approval happens in Design Agent; this file just carries them out), and can undo them.
 
-figma.showUI(__html__, { width: 260, height: 104, title: "Design Agent" });
+// The plugin's window stays invisible: it only holds the connection to Design Agent.
+// A short Figma message says when it's connected (or when Design Agent isn't running).
+figma.showUI(__html__, { visible: false });
 
 const ORANGE = { r: 0.949, g: 0.337, b: 0.114 };
 const WHITE = { r: 1, g: 1, b: 1 };
@@ -881,7 +883,12 @@ async function runTool(tool, args) {
 
 figma.ui.onmessage = async (message) => {
   if (message.type === "connected") {
+    figma.notify("Design Agent connected", { timeout: 2500 });
     reportActivity();
+    return;
+  }
+  if (message.type === "not-running") {
+    figma.notify("Design Agent isn't running. Start it on your computer and this connects by itself.", { timeout: 6000 });
     return;
   }
   if (message.type !== "request") return;

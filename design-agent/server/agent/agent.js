@@ -452,6 +452,11 @@ export function createAgent({ broadcast, parts, captures }) {
       broadcast({ type: "error", message: "One moment, I'm still answering." });
       return;
     }
+    // Asking about Figma while the plugin isn't running: start it first (Windows).
+    if (!parts.connected("figma") && MEANS_FIGMA.test(text) && parts.ensureFigma) {
+      broadcast({ type: "notice", message: "Starting the Design Agent plugin in Figma…", quiet: true });
+      await parts.ensureFigma();
+    }
     const note = pending
       ? `\n[A proposed change is still waiting for the user's approval: "${pending.summary}". If they now want something different, propose the new version (it replaces the waiting one). Only the user can approve it.]`
       : "";

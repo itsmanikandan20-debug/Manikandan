@@ -1,4 +1,4 @@
-<!-- The plugin's small window. It holds the connection to Design Agent on this computer
+<!-- The plugin's window (kept invisible). It holds the connection to Design Agent on this computer
      (the plugin's main code can't use the network) and passes messages both ways. -->
 <style>
   :root { --ink: #16181D; --muted: #5A6170; --ok: #1F9D55; --off: #A3A9B4; --ai: #F2561D; }
@@ -20,6 +20,7 @@
 <script>
   const SERVER = "ws://localhost:3456/ws";
   let socket = null;
+  let toldNotRunning = false;
 
   function setStatus(connected, text) {
     document.getElementById("status").classList.toggle("on", connected);
@@ -36,6 +37,7 @@
     socket.onopen = () => {
       socket.send(JSON.stringify({ type: "hello", role: "figma" }));
       setStatus(true, "Connected. Talk to it in the helper window.");
+      toldNotRunning = false;
       parent.postMessage({ pluginMessage: { type: "connected" } }, "*");
     };
     socket.onmessage = (event) => {
@@ -45,6 +47,11 @@
     };
     socket.onclose = () => {
       setStatus(false, "Design Agent isn't running. Start it and this connects by itself.");
+      // Tell the plugin once, so Figma can show a short message (this window is invisible).
+      if (!toldNotRunning) {
+        toldNotRunning = true;
+        parent.postMessage({ pluginMessage: { type: "not-running" } }, "*");
+      }
       setTimeout(connect, 3000);
     };
     socket.onerror = () => {};

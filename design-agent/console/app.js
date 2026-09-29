@@ -259,7 +259,17 @@
   }
 
   // ---------- status ----------
+  function showSettings(settings) {
+    if (!settings) return;
+    $("autostart-row").hidden = !settings.autoStartSupported;
+    $("set-autostart").checked = settings.autoStartFigma;
+  }
+  $("set-autostart").addEventListener("change", (e) => {
+    if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "setting", autoStartFigma: e.target.checked }));
+  });
+
   function showStatus(status) {
+    showSettings(status.settings);
     setup.hidden = status.hasKey;
     $("st-ai").classList.toggle("on", status.hasKey);
     $("st-ai").textContent = status.hasKey ? "AI ready" : "AI: needs key";
@@ -345,6 +355,15 @@
         $("caption").dataset.who = "agent";
         break;
       }
+      case "notice":
+        if (message.quiet) {
+          $("caption").textContent = message.message;
+          $("caption").dataset.who = "agent";
+        } else {
+          showProblem(message.message);
+          if (voice.isOn()) voice.say(message.message);
+        }
+        break;
       case "open_url":
         window.open(message.url, "_blank", "noopener");
         break;

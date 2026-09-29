@@ -13,6 +13,7 @@ import { createAgent } from "./agent/agent.js";
 import { AiError, listChatModels, pickModel } from "./ai/gemini.js";
 import { openWindow } from "./open-window.js";
 import { createCaptures } from "./captures.js";
+import { createFigmaAutostart } from "./figma-autostart.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ENV_FILE = path.join(ROOT, ".env");
@@ -41,8 +42,11 @@ function connections() {
     browserNeedsReload: clients.browser.size > 0 && extensionNeedsReload,
   };
 }
+function settings() {
+  return { autoStartFigma: process.env.AUTO_START_FIGMA !== "off", autoStartSupported: process.platform === "win32" };
+}
 function broadcastStatus() {
-  broadcast({ type: "status", ...agent.status(), connections: connections() });
+  broadcast({ type: "status", ...agent.status(), connections: connections(), settings: settings() });
 }
 
 // ---------- asking the Chrome add-on / Figma plugin to do something ----------
@@ -118,6 +122,24 @@ function expectedExtensionCore() {
   }
 }
 let extensionNeedsReload = false;
+
+// ---------- starting the Figma plugin automatically (Windows) ----------
+const autostart = createFigmaAutostart({
+  isConnected: () => clients.figma.size > 0,
+  enabled: () => process.env.AUTO_START_FIGMA !== "off",
+  onNeedsHelp: () =>
+    broadcast({
+      type: "notice",
+      message:
+        "I couldn't start the Figma plugin by myself (maybe another plugin was used last). In Figma, run Plugins → Development → Design Agent once; after that I can start it for you.",
+    }),
+  // The app you're using (not the helper window) tells us what "this" means.
+  onFront: (app) => {
+    if (/^figma$/i.test(app)) lastActivity.figma = Date.now();
+    else if (/^chrome$/i.test(app)) lastActivity.browser = Date.now();
+  },
+});
+parts.ensureFigma = () => autostart.ensure();
 
 const captures = createCaptures(ROOT);
 const agent = createAgent({ broadcast, parts, captures });
@@ -251,7 +273,7 @@ wss.on("connection", (socket) => {
         send(socket, { type: "history", messages: agent.history() });
         const waiting = agent.pendingApproval();
         if (waiting) send(socket, { type: "approval", ...waiting });
-        send(socket, { type: "status", ...agent.status(), connections: connections() });
+        send(socket, { type: "status", ...agent.status(), connections: connections(), settings: settings() });
       } else {
         if (role === "browser") {
           extensionNeedsReload = Number(message.core || 0) < expectedExtensionCore();
@@ -287,6 +309,10 @@ wss.on("connection", (socket) => {
       if (message.type === "approve") agent.approve(String(message.id || ""));
       if (message.type === "reject") agent.reject(String(message.id || ""));
       if (message.type === "undo") agent.undoLast();
+      if (message.type === "setting" && typeof message.autoStartFigma === "boolean") {
+        saveEnvValue(ENV_FILE, "AUTO_START_FIGMA", message.autoStartFigma ? "on" : "off");
+        broadcastStatus();
+      }
       // The helper window says when to move the pointer (in time with the voice).
       if (message.type === "point") pointAt(String(message.target || ""));
       if (message.type === "point_clear") clearPointers();
@@ -323,4 +349,5 @@ server.listen(PORT, "127.0.0.1", () => {
   if (!process.env.GEMINI_API_KEY) console.log("  First time? The helper window will ask for your free Gemini key.\n");
   if (shouldOpen) openWindow(URL_BASE);
   agent.warmUp();
+  autostart.start();
 });

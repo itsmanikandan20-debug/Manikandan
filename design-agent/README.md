@@ -155,10 +155,17 @@ from there.
    **Import plugin from manifest…**
 3. Go to your **design-agent** folder → **figma-plugin** → choose **manifest.json**.
 
-To start it in a file: **Plugins → Development → Design Agent** (or press
-**Ctrl + /** and type "Design Agent"). A small window says **Connected**, and the
-**Figma** light in the helper window turns green. Keep that small window open
-while you work.
+**Starting it:** the first time, run **Plugins → Development → Design Agent**
+(or press **Ctrl + /** and type "Design Agent"). Figma shows a short message
+**"Design Agent connected"** and the **Figma** light in the helper window turns
+green. The plugin has no window, so it doesn't get in your way.
+
+**After that it starts by itself (Windows):** whenever you open a Figma file, or
+ask about Figma, Design Agent presses **Ctrl + Alt + P** ("run last plugin") in
+Figma for you. If you used a different plugin last, that one would start
+instead: then Design Agent asks you to run Design Agent once from the Plugins
+menu, and it works automatically again. You can switch this off in
+**Settings** in the helper window.
 
 The orange arrow in Figma is a temporary, locked layer called "Design Agent
 pointer (temporary)". It removes itself; people in the file may see it briefly.
