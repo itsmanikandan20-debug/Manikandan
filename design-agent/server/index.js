@@ -72,7 +72,7 @@ const server = http.createServer(async (req, res) => {
         return json(res, 400, {
           ok: false,
           error: clean
-            ? `That's too short to be a key (${clean.length} characters). A Gemini key is about 39 characters and usually starts with "AIza".`
+            ? `That's too short to be a key (${clean.length} characters). Use the Copy button next to your key on aistudio.google.com/apikey.`
             : "Paste your key in the box first.",
         });
       }
