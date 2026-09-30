@@ -51,9 +51,10 @@ The standard voice (used as a backup, or if you untick **Phone-call voice** in S
    both parts together instead of answering half your sentence.
 4. Tap the penguin again to stop listening.
 
-**Fastest answers:** add the free **Groq** key (Settings → Backup AIs). For normal
-talk Design Agent asks Groq first because it replies in a fraction of a second;
-Gemini is still used for looking at pages, Figma and designs.
+**Fastest answers:** Design Agent asks Gemini first. If Gemini hasn't started
+answering within **half a second**, it also asks your next backup AI (Groq is the
+fastest), and half a second later the next one; whichever answers first is used.
+So add the free **Groq** key (Settings → Backup AIs).
 
 Tips: **headphones** work best, so it doesn't hear its own voice. In **Settings**
 you can pick your accent, its voice and its speed. **Show text** shows the
@@ -77,12 +78,10 @@ This needs the **Chrome add-on**, installed once (below).
 Say what you want, for example **"Create a wireframe for a mobile login screen"**,
 **"Design a pricing section for desktop"** or **"Sketch a dashboard"**.
 
-1. It plans the layout and shows an approval card, e.g. *Create a wireframe
-   "Login – mobile" (390 wide, 14 layers) to the right of "Homepage"*.
-2. Say **yes**: it builds it in Figma as a new frame with auto-layout (so it's
-   easy to edit), then describes what it made.
-3. Ask for changes ("make the button bigger", "add a sign-up link"), each after
-   your yes. **Undo** removes the whole new frame.
+1. It builds it straight away in Figma as a new frame with auto-layout (so it's
+   easy to edit), next to what you're looking at, and says what it made.
+2. Ask for changes ("make the button bigger", "add a sign-up link"): done at once.
+3. **Undo** removes the whole new frame.
 
 "Wireframe", "sketch" or "low-fi" gives greyscale boxes; "design", "mockup" or
 "hi-fi" uses real colours and your file's own font. Mobile is 390 wide unless you
@@ -121,23 +120,19 @@ and a picture of the frame. Select a layer or frame to focus on it; with nothing
 selected it looks at the frames on screen. Its orange arrow appears on the
 canvas too.
 
-## Changing your Figma design (only after you say yes)
+## Changing your Figma design
 
 It can change text, font size, font, line height, colours, auto-layout spacing
 and padding, position, size, corner radius and layer names, and it can
-duplicate, group or turn layers into components. It **never changes anything on
-its own**:
+duplicate, group or turn layers into components.
 
-1. It suggests a change and asks, e.g. "I can make that gap 24. Want me to?"
-2. An **approval card** shows exactly what will change (for example
-   "Homepage gap 40 → 24").
-3. Say **"yes"** (or click **Apply**) to do it. Say **"no"** (or click **Not
-   now**) to leave it. Anything else just continues the conversation.
-4. It makes the change, looks at the result and tells you how it turned out.
-5. Changed your mind? Say **"undo"** (or click **Undo**), or press **Ctrl + Z** in Figma.
+When you ask ("make the title bigger", "make these changes"), **it just does it**,
+no questions, and tells you in a few words. Changed your mind? Say **"undo"** (or
+press **Ctrl + Z** in Figma).
 
-Only your own "yes" or click can approve a change: the AI can't approve its own
-suggestions.
+Prefer to approve each change first? Turn on **Settings → Ask me before changing
+my Figma design**. Then an approval card shows what will change, and only your
+own "yes" or click can approve it.
 
 It knows whether you mean the website or Figma from what you used last, or say
 "on the website" / "in Figma". When it's connected,

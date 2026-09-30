@@ -8,12 +8,13 @@ import { BACKUPS, pickBackupModel, streamBackup } from "../ai/backups.js";
 import { randomUUID } from "node:crypto";
 import { SYSTEM_PROMPT } from "./prompt.js";
 import { openInChrome, searchWeb } from "../web.js";
-import { CHANGE_TOOL, DESIGN_TOOL, classifyReply, isDirectRequest } from "./approvals.js";
+import { CHANGE_TOOL, DESIGN_TOOL, classifyReply } from "./approvals.js";
 
 const MAX_HISTORY = 40; // messages kept for context (always an even number: question + answer)
 const MAX_MODELS_TO_TRY = 6; // when Google is busy, try up to this many models
 const MAX_TOOL_ROUNDS = 3;
-const RETRY_DELAY_MS = 1500;
+const HEDGE_MS = 500; // no answer from one AI within this: ask the next one too
+const MAX_PARALLEL = 3; // at most this many AIs asked at the same time
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -190,105 +191,175 @@ export function createAgent({ broadcast, parts, captures }) {
     return tools;
   }
 
-  async function* streamTurn(contents, waitedOnce = false, firstWordsWithinMs = 8000, { quick = false, stop = null } = {}) {
+  /**
+   * Streams one model turn, racing the AIs: the first one starts at once; if it hasn't started
+   * answering within `hedgeMs` (0.5 s for talk), the next one is asked too, and so on. Whoever
+   * answers first wins and the others are cancelled. Once an answer is coming, it never switches,
+   * so answers never get mixed up.
+   */
+  async function* streamTurn(contents, waitedOnce = false, firstWordsWithinMs = 8000, { stop = null, hedgeMs = HEDGE_MS } = {}) {
     const tools = toolsNow();
     let lastError;
     const all = await candidates();
     if (!all.length) throw new AiError("No AI is set up. Add your free Gemini key in Settings.");
     let available = all.filter((c) => (usedUpUntil.get(`${c.provider}:${c.model}`) || 0) < Date.now());
-    if (Date.now() < geminiSlowUntil && available.some((c) => c.backup)) {
-      // Gemini was busy or slow a moment ago: backups first.
-      available = available.filter((c) => c.backup).concat(available.filter((c) => !c.backup));
-    } else if (quick) {
-      // Plain talk: the very fast AIs (Groq, Cerebras) answer in well under a second, so they go first.
-      available = available.filter((c) => c.backup && c.backup.fast).concat(available.filter((c) => !(c.backup && c.backup.fast)));
-    }
+    if (!available.length) available = all;
+    // Gemini's best model first, then the backups (fastest first), then Gemini's other models.
+    const gemini = available.filter((c) => !c.backup);
+    const backups = available.filter((c) => c.backup);
+    let queue = Date.now() < geminiSlowUntil && backups.length
+      ? [...backups, ...gemini] // Gemini was slow a moment ago: backups first for a few minutes
+      : [...gemini.slice(0, 1), ...backups, ...gemini.slice(1)];
+
     const minuteWaits = [];
     let skipGemini = false;
-    for (const candidate of available.length ? available : all) {
-      if (stop && stop.aborted) throw new Stopped();
-      const { provider, model, backup } = candidate;
-      if (skipGemini && provider === "gemini") continue;
-      const label = backup ? `Backup AI (${backup.name} ${model})` : `Gemini ${model}`;
-      for (let attempt = 0; attempt < 2; attempt++) {
-        let started = false;
-        // If the first words don't arrive in time, give up on this one and try the next.
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), firstWordsWithinMs);
-        const onStop = () => controller.abort();
-        if (stop) stop.addEventListener("abort", onStop);
+    let pulse = null;
+    const wake = () => {
+      const p = pulse;
+      pulse = null;
+      if (p) p();
+    };
+    const running = [];
+
+    const labelOf = (c) => (c.backup ? `Backup AI (${c.backup.name} ${c.model})` : `Gemini ${c.model}`);
+
+    function launch(candidate) {
+      const { backup, model } = candidate;
+      const controller = new AbortController();
+      const attempt = { candidate, label: labelOf(candidate), controller, events: [], started: false, done: false, error: null, cancelled: false, startedAt: Date.now() };
+      const timer = setTimeout(() => controller.abort(), firstWordsWithinMs); // hard limit for the first words
+      const onStop = () => controller.abort();
+      if (stop) stop.addEventListener("abort", onStop);
+      (async () => {
         try {
           const stream = backup
             ? streamBackup({ backup, key: process.env[backup.envKey], model, vision: candidate.vision, system: SYSTEM_PROMPT, contents, tools, signal: controller.signal })
             : streamChat({ key: process.env.GEMINI_API_KEY, model, system: SYSTEM_PROMPT, contents, tools, signal: controller.signal });
           for await (const event of stream) {
-            if ((event.text || event.call) && !started) clearTimeout(timer);
-            if (event.text || event.call) {
-              if (!started && backup) broadcast({ type: "notice", message: `Using the backup AI (${backup.name}).`, quiet: true });
-              started = true;
-              answeringModel = label;
+            if (!attempt.started && (event.text || event.call)) {
+              attempt.started = true;
+              clearTimeout(timer);
             }
-            yield event;
+            attempt.events.push(event);
+            wake();
           }
-          clearTimeout(timer);
-          if (stop) stop.removeEventListener("abort", onStop);
-          if (provider === "gemini" && models[0] !== model) models = [model, ...models.filter((m) => m !== model)];
-          return;
         } catch (caught) {
+          attempt.error = caught;
+        } finally {
+          attempt.done = true;
           clearTimeout(timer);
           if (stop) stop.removeEventListener("abort", onStop);
-          if (stop && stop.aborted) throw new Stopped(); // you interrupted: just stop
-          let error = caught;
-          if (!started && (caught.name === "AbortError" || controller.signal.aborted)) {
-            error = new AiError(`${label} was too slow.`, { status: 504, retryable: true });
-          }
-          if (error instanceof AiError && error.detail) console.log(`  ${label} said: ${error.detail}`);
-          // Gemini busy (5xx) or too slow: don't try other Gemini models, go to the backups now,
-          // and let the backups go first for a few minutes.
-          if (!started && error instanceof AiError && provider === "gemini" && error.status >= 500 && hasBackup()) {
-            lastError = error;
-            geminiSlowUntil = Date.now() + GEMINI_COOLDOWN_MS;
-            console.log(`  ${label} is ${error.status === 504 ? "too slow" : "busy"}; using the backup AIs first for a few minutes.`);
-            skipGemini = true;
-            break;
-          }
-          // Google refused this request (400): other Gemini models would too, so go to the backups.
-          if (!started && error instanceof AiError && error.status === 400 && provider === "gemini") {
-            lastError = error;
-            if (hasBackup()) {
-              skipGemini = true;
-              break;
-            }
-            throw error;
-          }
-          if (started || !(error instanceof AiError) || !error.retryable) throw error;
-          lastError = error;
-          if (error.status === 429) {
-            // Each model has its own free allowance: go straight to the next one.
-            if (error.limit === "day") usedUpUntil.set(`${provider}:${model}`, Date.now() + 60 * 60 * 1000);
-            else minuteWaits.push(error.retryAfter || 30);
-            console.log(`  ${label}: free ${error.limit === "day" ? "daily" : "per-minute"} limit reached; trying the next one...`);
-            break;
-          }
-          if (backup && error.status === 404) backupModels.delete(backup.id); // pick another model next time
-          if (backup && (error.status === 401 || error.status === 403)) {
-            usedUpUntil.set(`${provider}:${model}`, Date.now() + 60 * 60 * 1000); // broken key: skip it for an hour
-            broadcast({ type: "notice", message: `Your ${backup.name} key doesn't work. Paste it again in Settings.`, quiet: true });
-          }
-          console.log(`  ${label} answered ${error.status || "an error"}; ${attempt === 0 && !backup ? "retrying" : "trying the next one"}...`);
-          // Backups: one try each, then move on (there are others to try).
-          if (!backup && attempt === 0 && error.status !== 404 && error.status !== 400 && error.status !== 504) await wait(RETRY_DELAY_MS);
-          else break;
+          wake();
+        }
+      })();
+      return attempt;
+    }
+
+    /** Learns from a failed attempt (limits, broken keys, slow Gemini). */
+    function noteFailure(attempt) {
+      const { candidate, label } = attempt;
+      const { provider, model, backup } = candidate;
+      let error = attempt.error;
+      if (!(error instanceof AiError)) {
+        error = error && (error.name === "AbortError" || attempt.controller.signal.aborted)
+          ? new AiError(`${label} was too slow.`, { status: 504, retryable: true })
+          : new AiError(`${label} failed: ${(error && error.message) || "unknown error"}`, { retryable: true });
+      }
+      lastError = error;
+      if (error.detail) console.log(`  ${label} said: ${error.detail}`);
+      if (error.status === 429) {
+        // Each model has its own free allowance.
+        if (error.limit === "day") usedUpUntil.set(`${provider}:${model}`, Date.now() + 60 * 60 * 1000);
+        else minuteWaits.push(error.retryAfter || 30);
+        console.log(`  ${label}: free ${error.limit === "day" ? "daily" : "per-minute"} limit reached.`);
+        return;
+      }
+      if (!backup && (error.status >= 500 || error.status === 400) && hasBackup()) {
+        // Busy, too slow or refused: other Gemini models would be too. Backups first for a few minutes.
+        skipGemini = true;
+        if (error.status >= 500) geminiSlowUntil = Date.now() + GEMINI_COOLDOWN_MS;
+      }
+      if (backup && error.status === 404) backupModels.delete(backup.id); // pick another model next time
+      if (backup && (error.status === 401 || error.status === 403)) {
+        usedUpUntil.set(`${provider}:${model}`, Date.now() + 60 * 60 * 1000); // broken key: skip it for an hour
+        broadcast({ type: "notice", message: `Your ${backup.name} key doesn't work. Paste it again in Settings.`, quiet: true });
+      }
+      console.log(`  ${label} answered ${error.status || "an error"}; trying the next one...`);
+    }
+
+    const cancelAll = (except) => {
+      for (const a of running) {
+        if (a !== except && !a.done) {
+          a.cancelled = true;
+          a.controller.abort();
         }
       }
+    };
+
+    let winner = null;
+    let nextLaunchAt = 0;
+    const noted = new Set();
+    for (;;) {
+      if (stop && stop.aborted) {
+        cancelAll();
+        throw new Stopped();
+      }
+      winner = running.find((a) => a.started);
+      if (winner) break;
+      for (const a of running) {
+        if (a.done && !noted.has(a)) {
+          noted.add(a);
+          noteFailure(a);
+        }
+      }
+      if (skipGemini) queue = queue.filter((c) => c.backup);
+      const alive = running.filter((a) => !a.done).length;
+      if (queue.length && (alive === 0 || (Date.now() >= nextLaunchAt && alive < MAX_PARALLEL))) {
+        const candidate = queue.shift();
+        if (running.length) console.log(`  No answer yet; also asking ${labelOf(candidate)}...`);
+        running.push(launch(candidate));
+        nextLaunchAt = Date.now() + hedgeMs;
+        continue;
+      }
+      if (!queue.length && alive === 0) break; // everyone failed
+      const waitMs = queue.length && alive < MAX_PARALLEL ? Math.max(0, nextLaunchAt - Date.now()) : 60000;
+      await new Promise((resolve) => {
+        pulse = resolve;
+        setTimeout(resolve, waitMs);
+      });
     }
+
+    if (winner) {
+      cancelAll(winner);
+      const { candidate, label } = winner;
+      answeringModel = label;
+      // A backup beat a still-thinking Gemini: let the backups go first for a few minutes.
+      if (candidate.backup && running.some((a) => !a.candidate.backup && a !== winner && !a.error)) {
+        geminiSlowUntil = Date.now() + GEMINI_COOLDOWN_MS;
+      }
+      if (candidate.backup) broadcast({ type: "notice", message: `Using the backup AI (${candidate.backup.name}).`, quiet: true });
+      let i = 0;
+      for (;;) {
+        while (i < winner.events.length) yield winner.events[i++];
+        if (winner.done) break;
+        await new Promise((resolve) => {
+          pulse = resolve;
+          setTimeout(resolve, 60000);
+        });
+      }
+      if (stop && stop.aborted) throw new Stopped();
+      if (winner.error) throw winner.error instanceof AiError ? winner.error : new AiError(`${label} stopped in the middle. Try again.`);
+      if (!candidate.backup && models[0] !== candidate.model) models = [candidate.model, ...models.filter((m) => m !== candidate.model)];
+      return;
+    }
+
     // Only per-minute limits left: wait the time asked for (up to 45 s) and try once more.
     if (!waitedOnce && minuteWaits.length && lastError && lastError.limit !== "day") {
       const seconds = Math.min(Math.ceil(Math.min(...minuteWaits)) + 1, 45);
       broadcast({ type: "notice", message: `Free limit reached: waiting ${seconds} seconds, then I'll answer…`, quiet: true });
       console.log(`  Waiting ${seconds} s for the free per-minute limit...`);
       await wait(seconds * 1000);
-      yield* streamTurn(contents, true, firstWordsWithinMs, { quick, stop });
+      yield* streamTurn(contents, true, firstWordsWithinMs, { stop, hedgeMs });
       return;
     }
     if (lastError && lastError.status === 429 && lastError.limit === "day") {
@@ -299,7 +370,7 @@ export function createAgent({ broadcast, parts, captures }) {
         { status: 429, limit: "day" },
       );
     }
-    throw lastError;
+    throw lastError || new AiError("No AI answered. Check your internet connection.");
   }
 
   // ---------- tools ----------
@@ -395,7 +466,9 @@ export function createAgent({ broadcast, parts, captures }) {
     if (!lines.length) return { error: "None of these changes can be made: " + preview.problems.join("; ") };
 
     if (pending) broadcast({ type: "approval_update", id: pending.id, state: "replaced" });
-    const direct = process.env.ASK_BEFORE_CHANGES !== "on" && isDirectRequest(currentRequest);
+    // You asked for it, so it's done (say "undo" to put it back). Only with "Ask me before
+    // changing" turned on in Settings does it wait for your yes.
+    const direct = process.env.ASK_BEFORE_CHANGES !== "on";
     // Only the changes that passed the check will be applied.
     const doable = now.filter((c, i) => !preview.valid || preview.valid[i]).concat(later);
     pending = { id: randomUUID(), summary: String(args.summary || "Change the design"), changes: doable, lines, problems: preview.problems };
@@ -743,15 +816,13 @@ export function createAgent({ broadcast, parts, captures }) {
       const contents = [...history, { role: "user", parts: userParts }];
       // Designs are big plans that arrive all at once, so give them longer before switching.
       const designing = DESIGN_REQUEST.test(promptText) || /\b(create|design|wireframe)\b/i.test(promptText);
-      const patience = designing ? 25000 : 5000;
-      // Plain talk (not about the screen, not a design): the fastest AI answers.
-      const quick = !designing && !surface && !extraParts.length;
+      const patience = designing ? 25000 : 8000;
 
       // UNDERSTAND / DISCUSS / SUGGEST: stream the answer; run any tools it asks for.
       for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
         const modelParts = [];
         const calls = [];
-        for await (const event of streamTurn(contents, false, quick && round === 0 ? 3000 : patience, { quick, stop: stopper.signal })) {
+        for await (const event of streamTurn(contents, false, patience, { stop: stopper.signal, hedgeMs: designing ? 8000 : HEDGE_MS })) {
           modelParts.push(event.part);
           if (event.call) calls.push(event.call);
           if (event.text) {
