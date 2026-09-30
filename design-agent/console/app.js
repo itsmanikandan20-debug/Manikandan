@@ -270,6 +270,9 @@
 
   function showStatus(status) {
     showSettings(status.settings);
+    $("backup-state").textContent = status.backup
+      ? "Backup AI is ready ✓" + (status.backup !== "ready" ? ` (${status.backup})` : "")
+      : "No backup AI yet.";
     setup.hidden = status.hasKey;
     $("st-ai").classList.toggle("on", status.hasKey);
     $("st-ai").textContent = status.hasKey ? "AI ready" : "AI: needs key";
@@ -421,6 +424,31 @@
   });
   document.querySelectorAll(".suggest").forEach((button) => {
     button.addEventListener("click", () => submit(button.textContent));
+  });
+
+  // ---------- backup AI key (Groq) ----------
+  $("backup-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const msg = $("backup-msg");
+    msg.className = "form-msg";
+    msg.textContent = "Checking the key…";
+    $("backup-save").disabled = true;
+    try {
+      const response = await fetch("/api/key", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-design-agent": "1" },
+        body: JSON.stringify({ key: $("backup-input").value, provider: "groq" }),
+      });
+      const result = await response.json();
+      msg.className = "form-msg " + (result.ok ? "good" : "bad");
+      msg.textContent = result.ok ? `Saved. Backup AI ready (${result.model}).` : result.error;
+      if (result.ok) $("backup-input").value = "";
+    } catch {
+      msg.className = "form-msg bad";
+      msg.textContent = "Design Agent isn't running. Start it again and retry.";
+    } finally {
+      $("backup-save").disabled = false;
+    }
   });
 
   // ---------- key setup ----------

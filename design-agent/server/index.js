@@ -11,6 +11,7 @@ import { WebSocketServer } from "ws";
 import { loadEnv, saveEnvValue } from "./env.js";
 import { createAgent } from "./agent/agent.js";
 import { AiError, listChatModels, pickModel } from "./ai/gemini.js";
+import { pickGroqModel } from "./ai/groq.js";
 import { openWindow } from "./open-window.js";
 import { createCaptures } from "./captures.js";
 import { createFigmaAutostart } from "./figma-autostart.js";
@@ -188,19 +189,24 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === "/api/key" && req.method === "POST") {
     try {
-      const { key } = await readJson(req);
+      const { key, provider } = await readJson(req);
+      const backup = provider === "groq";
       // Remove spaces, line breaks and quotes that often come along when copying.
       const clean = String(key || "").replace(/[\s"'`]/g, "");
       if (clean.length < 20) {
         return json(res, 400, {
           ok: false,
           error: clean
-            ? `That's too short to be a key (${clean.length} characters). Use the Copy button next to your key on aistudio.google.com/apikey.`
+            ? `That's too short to be a key (${clean.length} characters). Use the Copy button next to your key on ${backup ? "console.groq.com/keys" : "aistudio.google.com/apikey"}.`
             : "Paste your key in the box first.",
         });
       }
-      const model = process.env.GEMINI_MODEL || pickModel(await listChatModels(clean));
-      saveEnvValue(ENV_FILE, "GEMINI_API_KEY", clean);
+      // Check the key works (and find the best model) before saving it.
+      const model = backup
+        ? process.env.GROQ_MODEL || (await pickGroqModel(clean))
+        : process.env.GEMINI_MODEL || pickModel(await listChatModels(clean));
+      if (backup && !model) return json(res, 400, { ok: false, error: "That Groq key works, but no suitable model is available right now." });
+      saveEnvValue(ENV_FILE, backup ? "GROQ_API_KEY" : "GEMINI_API_KEY", clean);
       agent.forgetModel();
       agent.warmUp();
       broadcastStatus();

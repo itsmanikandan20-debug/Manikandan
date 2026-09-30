@@ -4,6 +4,7 @@
 // → SUGGEST → ASK FOR APPROVAL (the AI can only propose; see approvals.js)
 // → ACT (only after the user's yes) → VERIFY (it looks at the result and reports back).
 import { AiError, listChatModels, rankModels, streamChat } from "../ai/gemini.js";
+import { pickGroqModel, streamGroq } from "../ai/groq.js";
 import { randomUUID } from "node:crypto";
 import { SYSTEM_PROMPT } from "./prompt.js";
 import { CHANGE_TOOL, DESIGN_TOOL, classifyReply } from "./approvals.js";
@@ -106,6 +107,34 @@ export function createAgent({ broadcast, parts, captures }) {
   const usedUpUntil = new Map();
   let answeringModel = null; // the model giving the current answer (for the log)
 
+  // The backup AI (Groq), used when Gemini's free allowance runs out or it's busy.
+  let groqModel = null;
+  async function ensureGroqModel() {
+    if (!process.env.GROQ_API_KEY) return null;
+    if (!groqModel) groqModel = process.env.GROQ_MODEL || (await pickGroqModel(process.env.GROQ_API_KEY));
+    return groqModel;
+  }
+
+  /** Every AI we can try, best first: Gemini models, then the Groq backup. */
+  async function candidates() {
+    const list = [];
+    if (process.env.GEMINI_API_KEY) {
+      try {
+        for (const model of await ensureModels()) list.push({ provider: "gemini", model });
+      } catch (error) {
+        if (!process.env.GROQ_API_KEY) throw error;
+        console.log(`  Gemini isn't answering (${error.message}); using the backup AI.`);
+      }
+    }
+    try {
+      const model = await ensureGroqModel();
+      if (model) list.push({ provider: "groq", model });
+    } catch (error) {
+      console.log(`  The backup AI isn't available: ${error.message}`);
+    }
+    return list;
+  }
+
   async function* streamTurn(contents, waitedOnce = false) {
     const tools = [];
     if (parts.connected("browser")) tools.push(WEB_TOOL, SCREENSHOT_TOOL);
@@ -113,54 +142,61 @@ export function createAgent({ broadcast, parts, captures }) {
     if (parts.connected("figma")) tools.push(FIGMA_TOOL, FIND_TOOL, GOTO_TOOL, DESIGN_TOOL);
     tools.push(CHANGE_TOOL, OPEN_FILE_TOOL); // changes can also be for a file that isn't open yet
     let lastError;
-    const available = (await ensureModels()).filter((m) => (usedUpUntil.get(m) || 0) < Date.now());
+    const all = await candidates();
+    if (!all.length) throw new AiError("No AI is set up. Add your free Gemini key in Settings.");
+    const available = all.filter((c) => (usedUpUntil.get(`${c.provider}:${c.model}`) || 0) < Date.now());
     const minuteWaits = [];
-    for (const model of available.length ? available : models) {
+    for (const { provider, model } of available.length ? available : all) {
+      const label = provider === "groq" ? `Backup AI (Groq ${model})` : `Gemini ${model}`;
       for (let attempt = 0; attempt < 2; attempt++) {
         let started = false;
         try {
-          for await (const event of streamChat({
-            key: process.env.GEMINI_API_KEY,
-            model,
-            system: SYSTEM_PROMPT,
-            contents,
-            tools,
-          })) {
+          const stream = provider === "groq"
+            ? streamGroq({ key: process.env.GROQ_API_KEY, model, system: SYSTEM_PROMPT, contents, tools })
+            : streamChat({ key: process.env.GEMINI_API_KEY, model, system: SYSTEM_PROMPT, contents, tools });
+          for await (const event of stream) {
             if (event.text || event.call) {
+              if (!started && provider === "groq") broadcast({ type: "notice", message: "Using the backup AI (Groq).", quiet: true });
               started = true;
-              answeringModel = model;
+              answeringModel = label;
             }
             yield event;
           }
-          if (models[0] !== model) models = [model, ...models.filter((m) => m !== model)];
+          if (provider === "gemini" && models[0] !== model) models = [model, ...models.filter((m) => m !== model)];
           return;
         } catch (error) {
           if (started || !(error instanceof AiError) || !error.retryable) throw error;
           lastError = error;
           if (error.status === 429) {
             // Each model has its own free allowance: go straight to the next one.
-            if (error.limit === "day") usedUpUntil.set(model, Date.now() + 60 * 60 * 1000);
+            if (error.limit === "day") usedUpUntil.set(`${provider}:${model}`, Date.now() + 60 * 60 * 1000);
             else minuteWaits.push(error.retryAfter || 30);
-            console.log(`  Gemini ${model}: free ${error.limit === "day" ? "daily" : "per-minute"} limit reached; trying another model...`);
+            console.log(`  ${label}: free ${error.limit === "day" ? "daily" : "per-minute"} limit reached; trying the next one...`);
             break;
           }
-          console.log(`  Gemini ${model} answered ${error.status}; ${attempt === 0 ? "retrying" : "trying another model"}...`);
-          if (attempt === 0 && error.status !== 404) await wait(RETRY_DELAY_MS);
+          if (provider === "groq" && error.status === 404) groqModel = null; // pick another model next time
+          console.log(`  ${label} answered ${error.status}; ${attempt === 0 ? "retrying" : "trying the next one"}...`);
+          if (attempt === 0 && error.status !== 404 && error.status !== 400) await wait(RETRY_DELAY_MS);
           else break;
         }
       }
     }
-    // Only per-minute limits left: wait the time Google asks for (up to 45 s) and try once more.
+    // Only per-minute limits left: wait the time asked for (up to 45 s) and try once more.
     if (!waitedOnce && minuteWaits.length && lastError && lastError.limit !== "day") {
       const seconds = Math.min(Math.ceil(Math.min(...minuteWaits)) + 1, 45);
-      broadcast({ type: "notice", message: `Google's free limit: waiting ${seconds} seconds, then I'll answer…`, quiet: true });
+      broadcast({ type: "notice", message: `Free limit reached: waiting ${seconds} seconds, then I'll answer…`, quiet: true });
       console.log(`  Waiting ${seconds} s for the free per-minute limit...`);
       await wait(seconds * 1000);
       yield* streamTurn(contents, true);
       return;
     }
-    if (lastError && lastError.status === 429 && available.length > 1 && [...usedUpUntil.values()].some((t) => t > Date.now())) {
-      throw new AiError("Today's free Gemini allowance is used up on all the free models. It resets at midnight Pacific time.", { status: 429, limit: "day" });
+    if (lastError && lastError.status === 429 && lastError.limit === "day") {
+      throw new AiError(
+        process.env.GROQ_API_KEY
+          ? "Today's free allowance is used up on Gemini and on the backup AI. Gemini resets at midnight Pacific time."
+          : "Today's free Gemini allowance is used up. It resets at midnight Pacific time. Adding a free backup AI key (Groq) in Settings keeps me going.",
+        { status: 429, limit: "day" },
+      );
     }
     throw lastError;
   }
@@ -476,7 +512,7 @@ export function createAgent({ broadcast, parts, captures }) {
   async function handleUserText(text) {
     text = String(text || "").trim();
     if (!text) return;
-    if (!process.env.GEMINI_API_KEY) {
+    if (!process.env.GEMINI_API_KEY && !process.env.GROQ_API_KEY) {
       broadcast({ type: "error", message: "Add your free Gemini key first (Settings → Change AI key)." });
       return;
     }
@@ -596,9 +632,15 @@ export function createAgent({ broadcast, parts, captures }) {
         role: m.role === "model" ? "agent" : "user",
         text: m.parts.map((p) => p.text || "").join(""),
       })),
-    status: () => ({ hasKey: Boolean(process.env.GEMINI_API_KEY), model: models?.[0] || null, busy }),
+    status: () => ({
+      hasKey: Boolean(process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY),
+      model: models?.[0] || null,
+      backup: process.env.GROQ_API_KEY ? groqModel || "ready" : null,
+      busy,
+    }),
     forgetModel() {
       models = null;
+      groqModel = null;
     },
   };
 }

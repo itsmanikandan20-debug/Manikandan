@@ -46,6 +46,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, a:focus-visib
 .panel a { color: var(--ai); font-weight: 600; }
 .panel form { display: grid; gap: 8px; margin-top: 4px; }
 .panel label { font-size: 13px; font-weight: 600; }
+.backup { display: grid; gap: 6px; }
+.backup .row input { flex: 1; }
 .panel input[type="password"], .panel select { border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 9px 12px; width: 100%; min-width: 0; }
 .panel input[type="range"] { width: 100%; accent-color: var(--ai); }
 .check { display: flex; gap: 8px; align-items: flex-start; font-weight: 500 !important; }

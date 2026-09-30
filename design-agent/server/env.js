@@ -18,6 +18,6 @@ export function saveEnvValue(file, key, value) {
   const index = lines.findIndex((line) => line.match(new RegExp(`^\\s*${key}\\s*=`)));
   if (index >= 0) lines[index] = `${key}=${value}`;
   else lines.push(`${key}=${value}`);
-  writeFileSync(file, lines.filter((line, i) => line !== "" || i < lines.length - 1).join("\n") + "\n");
+  writeFileSync(file, lines.filter((line) => line.trim() !== "").join("\n") + "\n");
   process.env[key] = value;
 }
