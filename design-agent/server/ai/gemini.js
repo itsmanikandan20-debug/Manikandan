@@ -41,8 +41,9 @@ async function request(path, key, options = {}) {
       ...options,
       headers: { "content-type": "application/json", "x-goog-api-key": key, ...options.headers },
     });
-  } catch {
-    throw new AiError("I can't reach Google's AI service. Please check your internet connection.");
+  } catch (error) {
+    if (error && error.name === "AbortError") throw error; // we gave up waiting: try the next AI
+    throw new AiError("I can't reach Google's AI service. Please check your internet connection.", { retryable: true, status: 503 });
   }
   if (response.ok) return response;
 

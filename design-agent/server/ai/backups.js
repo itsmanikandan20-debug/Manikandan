@@ -72,7 +72,8 @@ async function request(backup, path, key, options = {}) {
         ...options.headers,
       },
     });
-  } catch {
+  } catch (error) {
+    if (error && error.name === "AbortError") throw error;
     throw new AiError(`I can't reach ${backup.name} (a backup AI).`, { retryable: true });
   }
   if (response.ok) return response;
@@ -186,7 +187,7 @@ function toMessages(system, contents, seesImages) {
 }
 
 /** Streams one model turn. Yields the same events as gemini.js streamChat. */
-export async function* streamBackup({ backup, key, model, vision, system, contents, tools }) {
+export async function* streamBackup({ backup, key, model, vision, system, contents, tools, signal }) {
   const body = {
     model,
     messages: toMessages(system, contents, vision),
@@ -199,7 +200,7 @@ export async function* streamBackup({ backup, key, model, vision, system, conten
       function: { name: t.name, description: t.description, parameters: t.parameters || { type: "object", properties: {} } },
     }));
   }
-  const response = await request(backup, "/chat/completions", key, { method: "POST", body: JSON.stringify(body) });
+  const response = await request(backup, "/chat/completions", key, { method: "POST", body: JSON.stringify(body), signal });
 
   const decoder = new TextDecoder();
   let buffer = "";

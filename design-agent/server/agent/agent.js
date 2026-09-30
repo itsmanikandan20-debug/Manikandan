@@ -135,6 +135,9 @@ export function createAgent({ broadcast, parts, captures }) {
   // Models whose free daily allowance is used up: skipped for a while (it resets at midnight Pacific).
   const usedUpUntil = new Map();
   let answeringModel = null; // the model giving the current answer (for the log)
+  // When Gemini is busy or slow, the backups go first for a few minutes (fast answers, like a call).
+  let geminiSlowUntil = 0;
+  const GEMINI_COOLDOWN_MS = 3 * 60 * 1000;
 
   // Backup AIs (Groq, Cerebras, Mistral, OpenRouter), used in order when Gemini can't answer.
   const backupModels = new Map(); // id -> { model, vision } once picked
@@ -173,7 +176,7 @@ export function createAgent({ broadcast, parts, captures }) {
     return list;
   }
 
-  async function* streamTurn(contents, waitedOnce = false) {
+  async function* streamTurn(contents, waitedOnce = false, firstWordsWithinMs = 8000) {
     const tools = [];
     if (parts.connected("browser")) tools.push(WEB_TOOL, SCREENSHOT_TOOL);
     tools.push(SEARCH_TOOL, OPEN_SITES_TOOL, LIST_SCREENSHOTS_TOOL);
@@ -182,7 +185,11 @@ export function createAgent({ broadcast, parts, captures }) {
     let lastError;
     const all = await candidates();
     if (!all.length) throw new AiError("No AI is set up. Add your free Gemini key in Settings.");
-    const available = all.filter((c) => (usedUpUntil.get(`${c.provider}:${c.model}`) || 0) < Date.now());
+    let available = all.filter((c) => (usedUpUntil.get(`${c.provider}:${c.model}`) || 0) < Date.now());
+    if (Date.now() < geminiSlowUntil && available.some((c) => c.backup)) {
+      // Gemini was busy or slow a moment ago: backups first.
+      available = available.filter((c) => c.backup).concat(available.filter((c) => !c.backup));
+    }
     const minuteWaits = [];
     let skipGemini = false;
     for (const candidate of available.length ? available : all) {
@@ -191,11 +198,15 @@ export function createAgent({ broadcast, parts, captures }) {
       const label = backup ? `Backup AI (${backup.name} ${model})` : `Gemini ${model}`;
       for (let attempt = 0; attempt < 2; attempt++) {
         let started = false;
+        // If the first words don't arrive in time, give up on this one and try the next.
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), firstWordsWithinMs);
         try {
           const stream = backup
-            ? streamBackup({ backup, key: process.env[backup.envKey], model, vision: candidate.vision, system: SYSTEM_PROMPT, contents, tools })
-            : streamChat({ key: process.env.GEMINI_API_KEY, model, system: SYSTEM_PROMPT, contents, tools });
+            ? streamBackup({ backup, key: process.env[backup.envKey], model, vision: candidate.vision, system: SYSTEM_PROMPT, contents, tools, signal: controller.signal })
+            : streamChat({ key: process.env.GEMINI_API_KEY, model, system: SYSTEM_PROMPT, contents, tools, signal: controller.signal });
           for await (const event of stream) {
+            if ((event.text || event.call) && !started) clearTimeout(timer);
             if (event.text || event.call) {
               if (!started && backup) broadcast({ type: "notice", message: `Using the backup AI (${backup.name}).`, quiet: true });
               started = true;
@@ -203,10 +214,25 @@ export function createAgent({ broadcast, parts, captures }) {
             }
             yield event;
           }
+          clearTimeout(timer);
           if (provider === "gemini" && models[0] !== model) models = [model, ...models.filter((m) => m !== model)];
           return;
-        } catch (error) {
+        } catch (caught) {
+          clearTimeout(timer);
+          let error = caught;
+          if (!started && (caught.name === "AbortError" || controller.signal.aborted)) {
+            error = new AiError(`${label} was too slow.`, { status: 504, retryable: true });
+          }
           if (error instanceof AiError && error.detail) console.log(`  ${label} said: ${error.detail}`);
+          // Gemini busy (5xx) or too slow: don't try other Gemini models, go to the backups now,
+          // and let the backups go first for a few minutes.
+          if (!started && error instanceof AiError && provider === "gemini" && error.status >= 500 && hasBackup()) {
+            lastError = error;
+            geminiSlowUntil = Date.now() + GEMINI_COOLDOWN_MS;
+            console.log(`  ${label} is ${error.status === 504 ? "too slow" : "busy"}; using the backup AIs first for a few minutes.`);
+            skipGemini = true;
+            break;
+          }
           // Google refused this request (400): other Gemini models would too, so go to the backups.
           if (!started && error instanceof AiError && error.status === 400 && provider === "gemini") {
             lastError = error;
@@ -232,7 +258,7 @@ export function createAgent({ broadcast, parts, captures }) {
           }
           console.log(`  ${label} answered ${error.status || "an error"}; ${attempt === 0 && !backup ? "retrying" : "trying the next one"}...`);
           // Backups: one try each, then move on (there are others to try).
-          if (!backup && attempt === 0 && error.status !== 404 && error.status !== 400) await wait(RETRY_DELAY_MS);
+          if (!backup && attempt === 0 && error.status !== 404 && error.status !== 400 && error.status !== 504) await wait(RETRY_DELAY_MS);
           else break;
         }
       }
@@ -243,7 +269,7 @@ export function createAgent({ broadcast, parts, captures }) {
       broadcast({ type: "notice", message: `Free limit reached: waiting ${seconds} seconds, then I'll answer…`, quiet: true });
       console.log(`  Waiting ${seconds} s for the free per-minute limit...`);
       await wait(seconds * 1000);
-      yield* streamTurn(contents, true);
+      yield* streamTurn(contents, true, firstWordsWithinMs);
       return;
     }
     if (lastError && lastError.status === 429 && lastError.limit === "day") {
@@ -690,12 +716,14 @@ export function createAgent({ broadcast, parts, captures }) {
         userParts.push({ text: `[What the user is looking at right now: ${where}]\n` + description.text }, ...images);
       }
       const contents = [...history, { role: "user", parts: userParts }];
+      // Designs are big plans that arrive all at once, so give them longer before switching.
+      const patience = DESIGN_REQUEST.test(promptText) || /\b(create|design|wireframe)\b/i.test(promptText) ? 25000 : 5000;
 
       // UNDERSTAND / DISCUSS / SUGGEST: stream the answer; run any tools it asks for.
       for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
         const modelParts = [];
         const calls = [];
-        for await (const event of streamTurn(contents)) {
+        for await (const event of streamTurn(contents, false, patience)) {
           modelParts.push(event.part);
           if (event.call) calls.push(event.call);
           if (event.text) {
