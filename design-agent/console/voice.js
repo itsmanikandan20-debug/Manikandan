@@ -44,6 +44,7 @@
     let active = false;
     let finalText = "";
     let sendTimer = null;
+    let networkErrors = 0;
 
     let speaking = false;
     let pending = 0;          // sentences queued or playing
@@ -110,6 +111,7 @@
       recognition.lang = settings.lang;
 
       recognition.onresult = (event) => {
+        networkErrors = 0; // it's working
         let interim = "";
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const result = event.results[i];
@@ -144,7 +146,16 @@
           stop();
           onProblem("I can't find a microphone. Plug one in (or check Windows sound settings) and tap the circle again.");
         } else if (event.error === "network") {
-          onProblem("Voice listening needs an internet connection.");
+          networkErrors++;
+          if (networkErrors >= 2) {
+            stop(); // don't keep retrying and failing
+            const edge = /Edg\//.test(navigator.userAgent);
+            onProblem(
+              edge
+                ? "Edge can't listen yet: turn on Windows' online speech recognition. Open Windows Settings → Privacy & security → Speech → turn on \"Online speech recognition\", then tap the circle again. (Or open http://localhost:3456 in Chrome instead.)"
+                : "Listening needs the internet (Chrome sends your voice to Google to turn it into text). Check your connection, then tap the circle again.",
+            );
+          }
         }
       };
 
