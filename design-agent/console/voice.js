@@ -163,6 +163,19 @@
         onCaption(heard, "you");
         clearTimeout(sendTimer);
         if (finalText.trim() && !interim) sendTimer = setTimeout(flush, 250);
+        else if (interim.trim()) {
+          // Edge can take seconds to confirm the last words. If nothing new is heard for
+          // 0.7 s, take what we have and restart listening (which drops the late copy).
+          sendTimer = setTimeout(() => {
+            finalText = (finalText + interim).trim();
+            try {
+              recognition.abort(); // restarts by itself a moment later
+            } catch {
+              // ignore
+            }
+            flush();
+          }, 700);
+        }
       };
 
       recognition.onerror = (event) => {

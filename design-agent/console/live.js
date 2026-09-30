@@ -130,6 +130,23 @@
       };
     }
 
+    /** A quiet two-note "on it" sound. */
+    function chime() {
+      if (!playContext) return;
+      const now = playContext.currentTime;
+      [660, 880].forEach((freq, i) => {
+        const osc = playContext.createOscillator();
+        const gain = playContext.createGain();
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0, now + i * 0.12);
+        gain.gain.linearRampToValueAtTime(0.06, now + i * 0.12 + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.12 + 0.25);
+        osc.connect(gain).connect(playContext.destination);
+        osc.start(now + i * 0.12);
+        osc.stop(now + i * 0.12 + 0.3);
+      });
+    }
+
     /** Messages about the call from Design Agent. Returns true if it was one. */
     function handle(message) {
       switch (message.type) {
@@ -149,6 +166,29 @@
           return true;
         case "live_said":
           onCaption(message.text, "agent");
+          return true;
+        case "live_working": {
+          // It's doing something (looking, searching, designing): show it, with a soft sound.
+          const label = {
+            look_at_webpage: "Looking at the page…",
+            look_at_figma: "Looking at your Figma design…",
+            search_web: "Searching…",
+            propose_design: "Designing it…",
+            propose_figma_changes: "Changing it…",
+            take_screenshot: "Taking a screenshot…",
+            open_websites: "Opening the websites…",
+          }[message.tool] || "Working on it…";
+          onCaption(label, "agent");
+          if (on && !playing.size) {
+            setState("thinking");
+            chime();
+          }
+          return true;
+        }
+        case "live_reconnecting":
+          stopPlayback();
+          onCaption("One sec, reconnecting…", "agent");
+          setState("thinking");
           return true;
         case "live_turn_done":
           if (on && !playing.size) setState("listening");

@@ -47,7 +47,7 @@ export async function pickLiveModel(key) {
  * events: onReady, onAudio(base64 PCM 24 kHz), onInterrupted, onHeard(text), onSaid(text),
  *         onTurnDone, onToolCalls([{ id, name, args }]), onGoAway, onClose(reason)
  */
-export function openLiveCall({ key, model, system, tools, voice, events }) {
+export function openLiveCall({ key, model, system, tools, voice, events, fast = true }) {
   const socket = new WebSocket(`${LIVE_URL}?key=${encodeURIComponent(key)}`);
   let ready = false;
 
@@ -68,6 +68,19 @@ export function openLiveCall({ key, model, system, tools, voice, events }) {
       // Long calls: older parts of the conversation are summarised instead of ending the call.
       contextWindowCompression: { slidingWindow: {} },
     };
+    if (fast) {
+      // Answer like a phone call: no silent "thinking" first, and reply as soon as you stop talking
+      // (about 0.3 s of silence) instead of waiting longer to be sure.
+      setup.generationConfig.thinkingConfig = { thinkingBudget: 0 };
+      setup.realtimeInputConfig = {
+        automaticActivityDetection: {
+          startOfSpeechSensitivity: "START_SENSITIVITY_HIGH",
+          endOfSpeechSensitivity: "END_SENSITIVITY_HIGH",
+          prefixPaddingMs: 40,
+          silenceDurationMs: 300,
+        },
+      };
+    }
     if (tools && tools.length) {
       setup.tools = [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description, ...(t.parameters ? { parameters: t.parameters } : {}) })) }];
     }
