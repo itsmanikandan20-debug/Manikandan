@@ -146,6 +146,24 @@ const CLEAR_MARKS_TOOL = {
   description: "Remove your review marks from the screen (Chrome and Figma). Use when they ask to clear or hide the marks/notes.",
 };
 
+const SCREENSHOT_TABS_TOOL = {
+  name: "screenshot_tabs",
+  description:
+    "Take a screenshot of MANY Chrome tabs and (by default) put them all into Figma in a neat row, one frame per site. " +
+    "which: 'opened' = the sites you opened with open_websites (default), 'all' = every website tab in their Chrome window. " +
+    "full_page true (default) scrolls each page for the whole length. figma_file: optional name of a Figma file that isn't open " +
+    "(they're added when it opens). It runs in the background: say it's started, and you'll be told when it's done.",
+  parameters: {
+    type: "object",
+    properties: {
+      which: { type: "string", description: "opened or all" },
+      full_page: { type: "boolean" },
+      put_in_figma: { type: "boolean", description: "Default true" },
+      figma_file: { type: "string" },
+    },
+  },
+};
+
 const LIST_SCREENSHOTS_TOOL = {
   name: "list_screenshots",
   description: "List the screenshots saved in the user's library (newest first): id, name, page address, when, and where each was put in Figma.",
@@ -217,7 +235,7 @@ export function createAgent({ broadcast, parts, captures }) {
   /** The tools the AI can use right now (some need Chrome or Figma to be connected). */
   function toolsNow({ all = false } = {}) {
     const tools = [];
-    if (all || parts.connected("browser")) tools.push(WEB_TOOL, SCREENSHOT_TOOL);
+    if (all || parts.connected("browser")) tools.push(WEB_TOOL, SCREENSHOT_TOOL, SCREENSHOT_TABS_TOOL);
     tools.push(SEARCH_TOOL, OPEN_SITES_TOOL, LIST_SCREENSHOTS_TOOL);
     if (all || parts.connected("figma")) tools.push(FIGMA_TOOL, FIND_TOOL, GOTO_TOOL, DESIGN_TOOL);
     if (all || parts.connected("browser") || parts.connected("figma")) tools.push(MARK_TOOL, CLEAR_MARKS_TOOL);
@@ -653,9 +671,23 @@ export function createAgent({ broadcast, parts, captures }) {
         return { response: { error: `Couldn't search: ${error.message}` }, extra: [] };
       }
     }
+    if (call.name === "screenshot_tabs") return { response: startTabScreenshots(call.args || {}), extra: [] };
     if (call.name === "open_websites") {
+      const urls = (call.args || {}).urls || [];
+      if (parts.connected("browser")) {
+        // Through the Chrome add-on, so we know which tabs these are (for "screenshot them all").
+        try {
+          const { opened } = await parts.call("browser", "web.open_tabs", { urls }, 15000);
+          openedTabs = opened;
+          console.log(`  Opened ${opened.length} site(s) in Chrome`);
+          broadcast({ type: "notice", message: `Opened ${opened.length} site${opened.length > 1 ? "s" : ""} in Chrome`, quiet: true });
+          return { response: { opened: opened.map((o) => o.url) }, extra: [] };
+        } catch (error) {
+          console.log(`  Opening through the add-on failed (${error.message}); opening Chrome directly.`);
+        }
+      }
       try {
-        const opened = openInChrome((call.args || {}).urls || []);
+        const opened = openInChrome(urls);
         console.log(`  Opened ${opened.length} site(s) in Chrome`);
         broadcast({ type: "notice", message: `Opened ${opened.length} site${opened.length > 1 ? "s" : ""} in Chrome`, quiet: true });
         return { response: { opened }, extra: [] };
@@ -714,6 +746,95 @@ export function createAgent({ broadcast, parts, captures }) {
     } catch (error) {
       return { error: `Couldn't take the screenshot: ${error.message}` };
     }
+  }
+
+  // ---------- screenshots of many tabs, put into Figma (runs in the background) ----------
+  let openedTabs = []; // [{ tabId, url }] the sites opened with open_websites
+  let tabJob = null;
+
+  function startTabScreenshots({ which = "opened", full_page = true, put_in_figma = true, figma_file = "" }) {
+    if (!parts.connected("browser")) return { error: "The Chrome add-on isn't connected." };
+    if (tabJob) return { error: "I'm still taking the last batch of screenshots. I'll say when it's done." };
+    tabJob = runTabScreenshots({ which: which === "all" ? "all" : "opened", fullPage: full_page !== false, toFigma: put_in_figma !== false, figmaFile: String(figma_file || "") })
+      .catch((error) => announce(`The screenshots stopped: ${error.message}`))
+      .finally(() => {
+        tabJob = null;
+      });
+    return { started: true, note: "Running in the background (about 5 to 15 seconds per page). Tell the user briefly that you're on it; you'll be told when it's done." };
+  }
+
+  /** Tells the user something when a background job finishes (spoken, also on a call). */
+  function announce(message) {
+    console.log(`  ${message}`);
+    broadcast({ type: "announce", message });
+    history.push({ role: "user", parts: [{ text: "(Design Agent note)" }] }, { role: "model", parts: [{ text: message }] });
+    history = history.slice(-MAX_HISTORY);
+  }
+
+  async function runTabScreenshots({ which, fullPage, toFigma, figmaFile }) {
+    let tabs = which === "opened" ? openedTabs : [];
+    if (!tabs.length) tabs = (await parts.call("browser", "web.list_tabs", {}, 10000)).tabs;
+    if (!tabs.length) return announce("There are no website tabs open in Chrome to screenshot.");
+    const entries = [];
+    const failed = [];
+    for (let i = 0; i < tabs.length; i++) {
+      const site = (() => {
+        try {
+          return new URL(tabs[i].url).hostname.replace(/^www\./, "");
+        } catch {
+          return tabs[i].url;
+        }
+      })();
+      broadcast({ type: "notice", message: `Screenshot ${i + 1} of ${tabs.length}: ${site}…`, quiet: true });
+      try {
+        const shot = await parts.call("browser", "web.screenshot", { fullPage, tabId: tabs[i].tabId }, 120000);
+        const entry = captures.add(shot);
+        entries.push(entry);
+        broadcast({ type: "captured", id: entry.id, name: entry.name, thumb: `/captures/${entry.files[0].file}` });
+        console.log(`  Saved ${entry.name} (${entry.cssWidth}x${entry.cssHeight})`);
+      } catch (error) {
+        failed.push(site);
+        console.log(`  Couldn't screenshot ${site}: ${error.message}`);
+      }
+    }
+    const missed = failed.length ? ` I couldn't capture ${failed.join(", ")}.` : "";
+    if (!entries.length) return announce(`I couldn't take any of the screenshots.${missed}`);
+    if (!toFigma) return announce(`Done: ${entries.length} screenshot${entries.length > 1 ? "s" : ""} saved.${missed}`);
+
+    const open = parts.figmaFile();
+    const change = (entry, extra) => ({
+      action: "place_screenshot",
+      capture_id: entry.id,
+      capture: { name: entry.name, css_width: entry.cssWidth, css_height: entry.cssHeight },
+      ...extra,
+    });
+    if (figmaFile && !(open && captures.sameFile(figmaFile, open.name))) {
+      for (const entry of entries) captures.addDelivery(change(entry, {}), figmaFile);
+      return announce(`Done: ${entries.length} screenshots are ready. They'll appear in "${figmaFile}" as soon as you open it in Figma.${missed}`);
+    }
+    if (!parts.connected("figma") && parts.ensureFigma) await parts.ensureFigma();
+    if (!parts.connected("figma")) return announce(`Done: ${entries.length} screenshots saved, but Figma isn't connected, so they're not in Figma yet. Run the plugin and say "put them in Figma".${missed}`);
+
+    // One by one (the images are big), each to the right of the previous one.
+    let previous = null;
+    let placed = 0;
+    for (const entry of entries) {
+      broadcast({ type: "notice", message: `Putting ${placed + 1} of ${entries.length} into Figma…`, quiet: true });
+      const c = change(entry, previous ? { near_id: previous, side: "right", gap: 120 } : {});
+      try {
+        const result = await parts.call("figma", "figma.apply", { changes: [{ ...c, images: captures.load(entry) }] }, 60000);
+        const r = result.results[0];
+        if (r && r.ok && r.created) {
+          captures.markPlaced(entry.id, r.created, result.file || "", r.page);
+          previous = r.created;
+          placed++;
+          lastApplied = { token: result.token, summary: `Add ${entry.name}` };
+        }
+      } catch (error) {
+        console.log(`  Couldn't put ${entry.name} into Figma: ${error.message}`);
+      }
+    }
+    return announce(`Done: ${placed} full${fullPage ? "-page" : ""} screenshot${placed === 1 ? "" : "s"} are in Figma, side by side.${missed}`);
   }
 
   /** Says something without asking the AI (used for approvals, "no" and "undo"). */

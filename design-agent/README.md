@@ -26,8 +26,14 @@ Figma design**.
 
 - **"Search for the latest web design trends"**: it searches the internet and
   tells you the answer.
-- **"Open 10 SEO company websites"**: it finds them and opens them as tabs in
-  your Chrome.
+- **"Open the top 10 SEO agencies"**: it searches, picks real company sites and
+  opens them as tabs in your Chrome.
+- **"Take full screenshots of all the opened pages and put them in Figma"**: it
+  goes through each tab (you'll see Chrome switch tabs), takes a full-page
+  screenshot of each, and puts them all in your Figma file **side by side**, one
+  frame per site. It works in the background (about 5 to 15 seconds per page) and
+  tells you when it's done. Say **"all my tabs"** for every tab in the window, or
+  name a Figma file that isn't open and they'll appear when you open it.
 
 ## Talking to it
 

@@ -7,7 +7,7 @@ const SERVER = "ws://localhost:3456/ws";
 const STATUS_URL = "http://localhost:3456/api/status";
 // Raise this whenever background.js or manifest.json change, so the helper can ask
 // you to reload the add-on once (Chrome only picks up those two files on reload).
-const CORE_VERSION = 5;
+const CORE_VERSION = 6;
 let socket = null;
 let pingTimer = null;
 let checking = false;
@@ -121,7 +121,49 @@ async function runTool(tool, args) {
   if (tool === "web.snapshot") return snapshot();
   if (tool === "page.call") return pageCall(args);
   if (tool === "web.screenshot") return screenshot(args);
+  if (tool === "web.open_tabs") return openTabs(args);
+  if (tool === "web.list_tabs") return listTabs();
   throw new Error(`unknown tool ${tool}`);
+}
+
+/** Opens web addresses as new tabs in your Chrome window (the first one comes to the front). */
+async function openTabs({ urls = [] }) {
+  const clean = urls.filter((u) => /^https?:\/\/\S+$/i.test(String(u))).slice(0, 15);
+  if (!clean.length) throw new Error("no valid web addresses");
+  let win = null;
+  try {
+    win = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
+  } catch {
+    win = null;
+  }
+  if (!win) win = await chrome.windows.create({ focused: true });
+  const opened = [];
+  for (let i = 0; i < clean.length; i++) {
+    const tab = await chrome.tabs.create({ windowId: win.id, url: clean[i], active: i === 0 });
+    opened.push({ tabId: tab.id, url: clean[i] });
+  }
+  await chrome.windows.update(win.id, { focused: true }).catch(() => {});
+  return { opened };
+}
+
+/** The website tabs in your Chrome window, left to right. */
+async function listTabs() {
+  const win = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
+  const tabs = await chrome.tabs.query({ windowId: win.id });
+  return { tabs: tabs.filter((t) => /^https?:/i.test(t.url || "")).map((t) => ({ tabId: t.id, url: t.url, title: t.title || "" })) };
+}
+
+/** Brings a tab to the front and waits until it has finished loading. */
+async function showTab(tabId) {
+  let tab = await chrome.tabs.get(tabId);
+  await chrome.tabs.update(tabId, { active: true });
+  await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+  for (let i = 0; i < 60 && tab.status !== "complete"; i++) {
+    await wait(500);
+    tab = await chrome.tabs.get(tabId);
+  }
+  await wait(1200); // let fonts, images and animations settle
+  return chrome.tabs.get(tabId);
 }
 
 /**
@@ -214,8 +256,8 @@ async function bitmapOf(dataUrl) {
 }
 
 /** Takes a screenshot of the visible part, or of the whole page (scrolling and stitching). */
-async function screenshot({ fullPage = false } = {}) {
-  const tab = await currentTab();
+async function screenshot({ fullPage = false, tabId = null } = {}) {
+  const tab = tabId ? await showTab(tabId) : await currentTab();
   if (!/^(https?|file):/i.test(tab.url || "")) throw new Error("Chrome doesn't let add-ons capture its own pages. Open a normal website.");
   const info = await inPage(tab.id, "captureStart");
   const shots = [];

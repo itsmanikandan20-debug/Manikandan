@@ -34,7 +34,10 @@ const clients = { console: new Set(), browser: new Set(), figma: new Set() };
 function send(socket, message) {
   if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(message));
 }
+const liveCalls = new Set(); // helper windows' phone calls
 function broadcast(message, role = "console") {
+  // A finished background job: on a call, the AI says it in its own voice.
+  if (message.type === "announce") for (const live of liveCalls) if (live.isOn()) live.note(message.message);
   for (const socket of clients[role]) send(socket, message);
 }
 function connections() {
@@ -363,6 +366,7 @@ wss.on("connection", (socket) => {
       if (message.type === "chat" && !(live && live.isOn() && live.text(String(message.text || "")))) agent.handleUserText(message.text);
       if (message.type === "live_start") {
         live = live || liveCallFor(socket);
+        liveCalls.add(live);
         live.start({ voice: String(message.voice || "") });
       }
       if (message.type === "live_stop" && live) live.stop();
@@ -386,7 +390,10 @@ wss.on("connection", (socket) => {
   });
 
   socket.on("close", () => {
-    if (live) live.stop();
+    if (live) {
+      live.stop();
+      liveCalls.delete(live);
+    }
     if (!role) return;
     clients[role].delete(socket);
     if (role === "figma" && !clients.figma.size) figmaFile = { name: "", key: "", page: "" };

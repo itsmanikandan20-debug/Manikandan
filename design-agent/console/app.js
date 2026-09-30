@@ -493,6 +493,13 @@
           if (voice.isOn()) voice.say(message.message);
         }
         break;
+      case "announce":
+        // A background job finished (like screenshots of many tabs).
+        addBubble("agent", message.message);
+        $("caption").textContent = message.message;
+        $("caption").dataset.who = "agent";
+        if (voice.isOn() && !live.isOn()) voice.say(message.message); // on a call, the AI says it itself
+        break;
       case "open_url":
         window.open(message.url, "_blank", "noopener");
         break;
