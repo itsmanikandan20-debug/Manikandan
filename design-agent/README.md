@@ -214,7 +214,8 @@ and double-click **Start Design Agent** again.
 |---|---|
 | "Node.js is not installed" | Install the **LTS** version from https://nodejs.org, then try again. |
 | "That Gemini key doesn't work" | Copy the key again from aistudio.google.com/apikey. In the helper window, open **Settings → Change AI key** and paste it. |
-| "The free Gemini limit was reached" | Wait a minute. The free plan allows a limited number of messages per minute and per day. |
+| "The free Gemini per-minute limit was reached" | Design Agent waits and retries by itself (up to 45 seconds). If you still see it, wait a minute. |
+| "Today's free Gemini allowance is used up" | The free plan allows a limited number of requests per day, per model. Design Agent already switches between free models. It resets at midnight Pacific time. |
 | The helper window says **Not running** | The black window was closed. Double-click **Start Design Agent** again. |
 | The helper window didn't open | Open Edge or Chrome and go to **http://localhost:3456** |
 | The **Chrome** light stays grey | Check the add-on is on in **chrome://extensions**. Then close and reopen Chrome. |

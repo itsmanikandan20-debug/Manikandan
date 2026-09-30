@@ -8,11 +8,29 @@ const BASE_URL = process.env.GEMINI_BASE_URL || "https://generativelanguage.goog
  * "retryable" means trying again, or with another model, may work (busy, limit, missing model).
  */
 export class AiError extends Error {
-  constructor(message, { status = 0, retryable = false } = {}) {
+  constructor(message, { status = 0, retryable = false, limit = null, retryAfter = 0 } = {}) {
     super(message);
     this.status = status;
     this.retryable = retryable;
+    this.limit = limit; // "minute" or "day" when a free limit was reached
+    this.retryAfter = retryAfter; // seconds Google asks us to wait
   }
+}
+
+/** Reads Google's "limit reached" answer: which limit (per minute / per day) and how long to wait. */
+function readLimit(body) {
+  let limit = "minute";
+  let retryAfter = 0;
+  try {
+    const details = JSON.parse(body).error.details || [];
+    for (const d of details) {
+      for (const v of d.violations || []) if (/PerDay/i.test(v.quotaId || "")) limit = "day";
+      if (d.retryDelay) retryAfter = parseFloat(d.retryDelay) || 0;
+    }
+  } catch {
+    if (/per ?day|daily/i.test(body)) limit = "day";
+  }
+  return { limit, retryAfter };
 }
 
 async function request(path, key, options = {}) {
@@ -36,7 +54,11 @@ async function request(path, key, options = {}) {
   }
   const status = response.status;
   if (status === 429) {
-    throw new AiError("The free Gemini limit was reached. Wait a minute and try again.", { status, retryable: true });
+    const { limit, retryAfter } = readLimit(body);
+    const message = limit === "day"
+      ? "Today's free Gemini allowance is used up. It resets at midnight Pacific time."
+      : `The free Gemini per-minute limit was reached. Try again in ${Math.ceil(retryAfter) || 60} seconds.`;
+    throw new AiError(message, { status, retryable: true, limit, retryAfter });
   }
   if (status === 404) {
     throw new AiError("That Gemini model isn't available right now.", { status, retryable: true });

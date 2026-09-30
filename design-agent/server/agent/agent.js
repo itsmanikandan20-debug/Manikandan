@@ -9,7 +9,7 @@ import { SYSTEM_PROMPT } from "./prompt.js";
 import { CHANGE_TOOL, DESIGN_TOOL, classifyReply } from "./approvals.js";
 
 const MAX_HISTORY = 40; // messages kept for context (always an even number: question + answer)
-const MAX_MODELS_TO_TRY = 4; // when Google is busy, try up to this many models
+const MAX_MODELS_TO_TRY = 6; // when Google is busy, try up to this many models
 const MAX_TOOL_ROUNDS = 3;
 const RETRY_DELAY_MS = 1500;
 
@@ -102,14 +102,20 @@ export function createAgent({ broadcast, parts, captures }) {
    * waits and retries once, then moves on to the next model. Once output has
    * started arriving, it doesn't switch, so answers never get mixed up.
    */
-  async function* streamTurn(contents) {
+  // Models whose free daily allowance is used up: skipped for a while (it resets at midnight Pacific).
+  const usedUpUntil = new Map();
+  let answeringModel = null; // the model giving the current answer (for the log)
+
+  async function* streamTurn(contents, waitedOnce = false) {
     const tools = [];
     if (parts.connected("browser")) tools.push(WEB_TOOL, SCREENSHOT_TOOL);
     tools.push(LIST_SCREENSHOTS_TOOL);
     if (parts.connected("figma")) tools.push(FIGMA_TOOL, FIND_TOOL, GOTO_TOOL, DESIGN_TOOL);
     tools.push(CHANGE_TOOL, OPEN_FILE_TOOL); // changes can also be for a file that isn't open yet
     let lastError;
-    for (const model of await ensureModels()) {
+    const available = (await ensureModels()).filter((m) => (usedUpUntil.get(m) || 0) < Date.now());
+    const minuteWaits = [];
+    for (const model of available.length ? available : models) {
       for (let attempt = 0; attempt < 2; attempt++) {
         let started = false;
         try {
@@ -120,7 +126,10 @@ export function createAgent({ broadcast, parts, captures }) {
             contents,
             tools,
           })) {
-            if (event.text || event.call) started = true;
+            if (event.text || event.call) {
+              started = true;
+              answeringModel = model;
+            }
             yield event;
           }
           if (models[0] !== model) models = [model, ...models.filter((m) => m !== model)];
@@ -128,11 +137,30 @@ export function createAgent({ broadcast, parts, captures }) {
         } catch (error) {
           if (started || !(error instanceof AiError) || !error.retryable) throw error;
           lastError = error;
+          if (error.status === 429) {
+            // Each model has its own free allowance: go straight to the next one.
+            if (error.limit === "day") usedUpUntil.set(model, Date.now() + 60 * 60 * 1000);
+            else minuteWaits.push(error.retryAfter || 30);
+            console.log(`  Gemini ${model}: free ${error.limit === "day" ? "daily" : "per-minute"} limit reached; trying another model...`);
+            break;
+          }
           console.log(`  Gemini ${model} answered ${error.status}; ${attempt === 0 ? "retrying" : "trying another model"}...`);
           if (attempt === 0 && error.status !== 404) await wait(RETRY_DELAY_MS);
           else break;
         }
       }
+    }
+    // Only per-minute limits left: wait the time Google asks for (up to 45 s) and try once more.
+    if (!waitedOnce && minuteWaits.length && lastError && lastError.limit !== "day") {
+      const seconds = Math.min(Math.ceil(Math.min(...minuteWaits)) + 1, 45);
+      broadcast({ type: "notice", message: `Google's free limit: waiting ${seconds} seconds, then I'll answer…`, quiet: true });
+      console.log(`  Waiting ${seconds} s for the free per-minute limit...`);
+      await wait(seconds * 1000);
+      yield* streamTurn(contents, true);
+      return;
+    }
+    if (lastError && lastError.status === 429 && available.length > 1 && [...usedUpUntil.values()].some((t) => t > Date.now())) {
+      throw new AiError("Today's free Gemini allowance is used up on all the free models. It resets at midnight Pacific time.", { status: 429, limit: "day" });
     }
     throw lastError;
   }
@@ -506,7 +534,7 @@ export function createAgent({ broadcast, parts, captures }) {
           modelParts.push(event.part);
           if (event.call) calls.push(event.call);
           if (event.text) {
-            if (!reply) console.log(`  First words after ${((Date.now() - startedAt) / 1000).toFixed(1)} s (${models?.[0]})`);
+            if (!reply) console.log(`  First words after ${((Date.now() - startedAt) / 1000).toFixed(1)} s (${answeringModel})`);
             reply += event.text;
             broadcast({ type: "agent_delta", text: event.text });
           }
