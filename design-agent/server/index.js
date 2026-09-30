@@ -11,7 +11,7 @@ import { WebSocketServer } from "ws";
 import { loadEnv, saveEnvValue } from "./env.js";
 import { createAgent } from "./agent/agent.js";
 import { AiError, listChatModels, pickModel } from "./ai/gemini.js";
-import { pickGroqModel } from "./ai/groq.js";
+import { BACKUPS, backupById, pickBackupModel } from "./ai/backups.js";
 import { openWindow } from "./open-window.js";
 import { createCaptures } from "./captures.js";
 import { createFigmaAutostart } from "./figma-autostart.js";
@@ -169,6 +169,10 @@ const fromOurApp = (req) => req.headers["x-design-agent"] === "1";
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, URL_BASE);
 
+  if (url.pathname === "/api/backups") {
+    return json(res, 200, BACKUPS.map((b) => ({ id: b.id, name: b.name, keysUrl: b.keysUrl })));
+  }
+
   if (url.pathname === "/api/status") {
     return json(res, 200, { ...agent.status(), connections: connections() });
   }
@@ -190,23 +194,28 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === "/api/key" && req.method === "POST") {
     try {
       const { key, provider } = await readJson(req);
-      const backup = provider === "groq";
+      const backup = provider ? backupById(provider) : null;
+      if (provider && !backup) return json(res, 400, { ok: false, error: "Unknown AI service." });
       // Remove spaces, line breaks and quotes that often come along when copying.
       const clean = String(key || "").replace(/[\s"'`]/g, "");
       if (clean.length < 20) {
         return json(res, 400, {
           ok: false,
           error: clean
-            ? `That's too short to be a key (${clean.length} characters). Use the Copy button next to your key on ${backup ? "console.groq.com/keys" : "aistudio.google.com/apikey"}.`
+            ? `That's too short to be a key (${clean.length} characters). Use the Copy button next to your key on ${backup ? backup.keysUrl : "aistudio.google.com/apikey"}.`
             : "Paste your key in the box first.",
         });
       }
       // Check the key works (and find the best model) before saving it.
-      const model = backup
-        ? process.env.GROQ_MODEL || (await pickGroqModel(clean))
-        : process.env.GEMINI_MODEL || pickModel(await listChatModels(clean));
-      if (backup && !model) return json(res, 400, { ok: false, error: "That Groq key works, but no suitable model is available right now." });
-      saveEnvValue(ENV_FILE, backup ? "GROQ_API_KEY" : "GEMINI_API_KEY", clean);
+      let model;
+      if (backup) {
+        const picked = await pickBackupModel(backup, clean);
+        if (!picked) return json(res, 400, { ok: false, error: `That ${backup.name} key works, but no suitable free model is available right now.` });
+        model = picked.model + (picked.vision ? "" : " (can't see pictures)");
+      } else {
+        model = process.env.GEMINI_MODEL || pickModel(await listChatModels(clean));
+      }
+      saveEnvValue(ENV_FILE, backup ? backup.envKey : "GEMINI_API_KEY", clean);
       agent.forgetModel();
       agent.warmUp();
       broadcastStatus();

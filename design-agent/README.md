@@ -141,16 +141,23 @@ You only do this once. After that, Design Agent **updates itself** every time yo
 
 You'll see **"Saved. You're ready to chat!"**
 
-### Optional: add a free backup AI (recommended)
+### Optional: add free backup AIs (recommended)
 
-Gemini's free plan has a daily limit. With a free **Groq** key, Design Agent
-switches to Groq by itself whenever Gemini runs out or is busy, and keeps going.
+Gemini's free plan has a daily limit. Add free keys from other AI services and
+Design Agent switches to them **by itself, in this order**, whenever Gemini runs
+out, is busy or refuses a request. They're all optional: add as many as you like.
 
-1. Go to **https://console.groq.com/keys**, sign in with Google, and click **Create API Key**, then **Copy**.
-2. In the helper window: **Settings → Backup AI key** → paste → **Save**.
+| # | Service | Get a free key | Notes |
+|---|---|---|---|
+| 1 | **Groq** | https://console.groq.com/keys | Very fast; can see screenshots |
+| 2 | **Cerebras** | https://cloud.cerebras.ai (API Keys) | Very fast; reads the page/layer details instead of pictures |
+| 3 | **Mistral** | https://console.mistral.ai/api-keys (free "Experiment" plan) | Can see screenshots |
+| 4 | **NVIDIA** | https://build.nvidia.com (Get API Key) | Free credits |
+| 5 | **OpenRouter** | https://openrouter.ai/keys | Free models, small daily limit |
 
-You'll see **"Backup AI is ready ✓"**. Gemini stays the main AI (its design
-feedback is better); Groq only takes over when needed, and the helper tells you.
+In the helper window: **Settings → Backup AIs** → paste a key in its row →
+**Save**. Each row shows **"Ready ✓"** when it works. The helper briefly says
+which backup is answering. A key that stops working is skipped for an hour.
 
 ### 4. Try it
 

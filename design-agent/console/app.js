@@ -270,9 +270,8 @@
 
   function showStatus(status) {
     showSettings(status.settings);
-    $("backup-state").textContent = status.backup
-      ? "Backup AI is ready ✓" + (status.backup !== "ready" ? ` (${status.backup})` : "")
-      : "No backup AI yet.";
+    backupStatus = status.backups || {};
+    renderBackupStates();
     setup.hidden = status.hasKey;
     $("st-ai").classList.toggle("on", status.hasKey);
     $("st-ai").textContent = status.hasKey ? "AI ready" : "AI: needs key";
@@ -426,30 +425,67 @@
     button.addEventListener("click", () => submit(button.textContent));
   });
 
-  // ---------- backup AI key (Groq) ----------
-  $("backup-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const msg = $("backup-msg");
-    msg.className = "form-msg";
-    msg.textContent = "Checking the key…";
-    $("backup-save").disabled = true;
+  // ---------- backup AI keys ----------
+  let backupStatus = {};
+
+  function renderBackupStates() {
+    document.querySelectorAll(".backup").forEach((row) => {
+      const model = backupStatus[row.dataset.id];
+      const state = row.querySelector(".backup-state");
+      state.textContent = model ? "Ready ✓" + (model !== "ready" ? ` (${model})` : "") : "No key yet";
+      state.classList.toggle("on", Boolean(model));
+    });
+  }
+
+  async function buildBackups() {
+    let list = [];
     try {
-      const response = await fetch("/api/key", {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-design-agent": "1" },
-        body: JSON.stringify({ key: $("backup-input").value, provider: "groq" }),
-      });
-      const result = await response.json();
-      msg.className = "form-msg " + (result.ok ? "good" : "bad");
-      msg.textContent = result.ok ? `Saved. Backup AI ready (${result.model}).` : result.error;
-      if (result.ok) $("backup-input").value = "";
+      list = await (await fetch("/api/backups")).json();
     } catch {
-      msg.className = "form-msg bad";
-      msg.textContent = "Design Agent isn't running. Start it again and retry.";
-    } finally {
-      $("backup-save").disabled = false;
+      return;
     }
-  });
+    const box = $("backup-list");
+    box.innerHTML = "";
+    list.forEach((b, i) => {
+      const row = document.createElement("form");
+      row.className = "backup";
+      row.dataset.id = b.id;
+      row.innerHTML =
+        `<div class="backup-head"><span class="backup-name">${i + 1}. ${b.name}</span><span class="backup-state"></span></div>` +
+        `<div class="row"><input type="password" autocomplete="off" spellcheck="false" id="key-${b.id}" aria-label="${b.name} key" placeholder="Paste your ${b.name} key">` +
+        `<button type="submit" class="icon-btn">Save</button></div>` +
+        `<p class="small">Free key: <a href="${b.keysUrl}" target="_blank" rel="noopener">${b.keysUrl.replace("https://", "")}</a></p>` +
+        `<p class="form-msg" role="status"></p>`;
+      row.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const msg = row.querySelector(".form-msg");
+        const input = row.querySelector("input");
+        const button = row.querySelector("button");
+        msg.className = "form-msg";
+        msg.textContent = "Checking the key…";
+        button.disabled = true;
+        try {
+          const response = await fetch("/api/key", {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-design-agent": "1" },
+            body: JSON.stringify({ key: input.value, provider: b.id }),
+          });
+          const result = await response.json();
+          msg.className = "form-msg " + (result.ok ? "good" : "bad");
+          msg.textContent = result.ok ? `Saved. ${b.name} is ready (${result.model}).` : result.error;
+          if (result.ok) input.value = "";
+        } catch {
+          msg.className = "form-msg bad";
+          msg.textContent = "Design Agent isn't running. Start it again and retry.";
+        } finally {
+          button.disabled = false;
+        }
+      });
+      box.appendChild(row);
+    });
+    renderBackupStates();
+  }
+  buildBackups();
 
   // ---------- key setup ----------
   $("key-form").addEventListener("submit", async (event) => {

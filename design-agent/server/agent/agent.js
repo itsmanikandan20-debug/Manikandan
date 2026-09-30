@@ -4,7 +4,7 @@
 // → SUGGEST → ASK FOR APPROVAL (the AI can only propose; see approvals.js)
 // → ACT (only after the user's yes) → VERIFY (it looks at the result and reports back).
 import { AiError, listChatModels, rankModels, streamChat } from "../ai/gemini.js";
-import { pickGroqModel, streamGroq } from "../ai/groq.js";
+import { BACKUPS, pickBackupModel, streamBackup } from "../ai/backups.js";
 import { randomUUID } from "node:crypto";
 import { SYSTEM_PROMPT } from "./prompt.js";
 import { CHANGE_TOOL, DESIGN_TOOL, classifyReply } from "./approvals.js";
@@ -107,30 +107,39 @@ export function createAgent({ broadcast, parts, captures }) {
   const usedUpUntil = new Map();
   let answeringModel = null; // the model giving the current answer (for the log)
 
-  // The backup AI (Groq), used when Gemini's free allowance runs out or it's busy.
-  let groqModel = null;
-  async function ensureGroqModel() {
-    if (!process.env.GROQ_API_KEY) return null;
-    if (!groqModel) groqModel = process.env.GROQ_MODEL || (await pickGroqModel(process.env.GROQ_API_KEY));
-    return groqModel;
+  // Backup AIs (Groq, Cerebras, Mistral, OpenRouter), used in order when Gemini can't answer.
+  const backupModels = new Map(); // id -> { model, vision } once picked
+  const hasBackup = () => BACKUPS.some((b) => process.env[b.envKey]);
+
+  async function backupModel(backup) {
+    if (!process.env[backup.envKey]) return null;
+    if (!backupModels.has(backup.id)) {
+      const fixed = process.env[`${backup.id.toUpperCase()}_MODEL`];
+      const picked = fixed ? { model: fixed, vision: /vision|vl|llama-4|pixtral|gemini|mistral/i.test(fixed) } : await pickBackupModel(backup, process.env[backup.envKey]);
+      if (!picked) return null;
+      backupModels.set(backup.id, picked);
+    }
+    return backupModels.get(backup.id);
   }
 
-  /** Every AI we can try, best first: Gemini models, then the Groq backup. */
+  /** Every AI we can try, best first: Gemini models, then each backup that has a key. */
   async function candidates() {
     const list = [];
     if (process.env.GEMINI_API_KEY) {
       try {
         for (const model of await ensureModels()) list.push({ provider: "gemini", model });
       } catch (error) {
-        if (!process.env.GROQ_API_KEY) throw error;
-        console.log(`  Gemini isn't answering (${error.message}); using the backup AI.`);
+        if (!hasBackup()) throw error;
+        console.log(`  Gemini isn't answering (${error.message}); using the backup AIs.`);
       }
     }
-    try {
-      const model = await ensureGroqModel();
-      if (model) list.push({ provider: "groq", model });
-    } catch (error) {
-      console.log(`  The backup AI isn't available: ${error.message}`);
+    for (const backup of BACKUPS) {
+      try {
+        const picked = await backupModel(backup);
+        if (picked) list.push({ provider: backup.id, backup, model: picked.model, vision: picked.vision });
+      } catch (error) {
+        console.log(`  ${backup.name} (backup) isn't available: ${error.message}`);
+      }
     }
     return list;
   }
@@ -147,18 +156,19 @@ export function createAgent({ broadcast, parts, captures }) {
     const available = all.filter((c) => (usedUpUntil.get(`${c.provider}:${c.model}`) || 0) < Date.now());
     const minuteWaits = [];
     let skipGemini = false;
-    for (const { provider, model } of available.length ? available : all) {
+    for (const candidate of available.length ? available : all) {
+      const { provider, model, backup } = candidate;
       if (skipGemini && provider === "gemini") continue;
-      const label = provider === "groq" ? `Backup AI (Groq ${model})` : `Gemini ${model}`;
+      const label = backup ? `Backup AI (${backup.name} ${model})` : `Gemini ${model}`;
       for (let attempt = 0; attempt < 2; attempt++) {
         let started = false;
         try {
-          const stream = provider === "groq"
-            ? streamGroq({ key: process.env.GROQ_API_KEY, model, system: SYSTEM_PROMPT, contents, tools })
+          const stream = backup
+            ? streamBackup({ backup, key: process.env[backup.envKey], model, vision: candidate.vision, system: SYSTEM_PROMPT, contents, tools })
             : streamChat({ key: process.env.GEMINI_API_KEY, model, system: SYSTEM_PROMPT, contents, tools });
           for await (const event of stream) {
             if (event.text || event.call) {
-              if (!started && provider === "groq") broadcast({ type: "notice", message: "Using the backup AI (Groq).", quiet: true });
+              if (!started && backup) broadcast({ type: "notice", message: `Using the backup AI (${backup.name}).`, quiet: true });
               started = true;
               answeringModel = label;
             }
@@ -168,10 +178,10 @@ export function createAgent({ broadcast, parts, captures }) {
           return;
         } catch (error) {
           if (error instanceof AiError && error.detail) console.log(`  ${label} said: ${error.detail}`);
-          // Google refused this request (400): other Gemini models would too, so go to the backup AI.
+          // Google refused this request (400): other Gemini models would too, so go to the backups.
           if (!started && error instanceof AiError && error.status === 400 && provider === "gemini") {
             lastError = error;
-            if (process.env.GROQ_API_KEY) {
+            if (hasBackup()) {
               skipGemini = true;
               break;
             }
@@ -186,9 +196,14 @@ export function createAgent({ broadcast, parts, captures }) {
             console.log(`  ${label}: free ${error.limit === "day" ? "daily" : "per-minute"} limit reached; trying the next one...`);
             break;
           }
-          if (provider === "groq" && error.status === 404) groqModel = null; // pick another model next time
-          console.log(`  ${label} answered ${error.status}; ${attempt === 0 ? "retrying" : "trying the next one"}...`);
-          if (attempt === 0 && error.status !== 404 && error.status !== 400) await wait(RETRY_DELAY_MS);
+          if (backup && error.status === 404) backupModels.delete(backup.id); // pick another model next time
+          if (backup && (error.status === 401 || error.status === 403)) {
+            usedUpUntil.set(`${provider}:${model}`, Date.now() + 60 * 60 * 1000); // broken key: skip it for an hour
+            broadcast({ type: "notice", message: `Your ${backup.name} key doesn't work. Paste it again in Settings.`, quiet: true });
+          }
+          console.log(`  ${label} answered ${error.status || "an error"}; ${attempt === 0 && !backup ? "retrying" : "trying the next one"}...`);
+          // Backups: one try each, then move on (there are others to try).
+          if (!backup && attempt === 0 && error.status !== 404 && error.status !== 400) await wait(RETRY_DELAY_MS);
           else break;
         }
       }
@@ -204,9 +219,9 @@ export function createAgent({ broadcast, parts, captures }) {
     }
     if (lastError && lastError.status === 429 && lastError.limit === "day") {
       throw new AiError(
-        process.env.GROQ_API_KEY
-          ? "Today's free allowance is used up on Gemini and on the backup AI. Gemini resets at midnight Pacific time."
-          : "Today's free Gemini allowance is used up. It resets at midnight Pacific time. Adding a free backup AI key (Groq) in Settings keeps me going.",
+        hasBackup()
+          ? "Today's free allowance is used up on Gemini and on your backup AIs. Gemini resets at midnight Pacific time. Adding another backup key in Settings helps."
+          : "Today's free Gemini allowance is used up. It resets at midnight Pacific time. Adding free backup AI keys in Settings keeps me going.",
         { status: 429, limit: "day" },
       );
     }
@@ -534,7 +549,7 @@ export function createAgent({ broadcast, parts, captures }) {
   async function handleUserText(text) {
     text = String(text || "").trim();
     if (!text) return;
-    if (!process.env.GEMINI_API_KEY && !process.env.GROQ_API_KEY) {
+    if (!process.env.GEMINI_API_KEY && !hasBackup()) {
       broadcast({ type: "error", message: "Add your free Gemini key first (Settings → Change AI key)." });
       return;
     }
@@ -655,14 +670,14 @@ export function createAgent({ broadcast, parts, captures }) {
         text: m.parts.map((p) => p.text || "").join(""),
       })),
     status: () => ({
-      hasKey: Boolean(process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY),
+      hasKey: Boolean(process.env.GEMINI_API_KEY || hasBackup()),
       model: models?.[0] || null,
-      backup: process.env.GROQ_API_KEY ? groqModel || "ready" : null,
+      backups: Object.fromEntries(BACKUPS.map((b) => [b.id, process.env[b.envKey] ? (backupModels.get(b.id) || {}).model || "ready" : null])),
       busy,
     }),
     forgetModel() {
       models = null;
-      groqModel = null;
+      backupModels.clear();
     },
   };
 }
