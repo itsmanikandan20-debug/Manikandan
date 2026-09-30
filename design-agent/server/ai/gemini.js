@@ -8,8 +8,9 @@ const BASE_URL = process.env.GEMINI_BASE_URL || "https://generativelanguage.goog
  * "retryable" means trying again, or with another model, may work (busy, limit, missing model).
  */
 export class AiError extends Error {
-  constructor(message, { status = 0, retryable = false, limit = null, retryAfter = 0 } = {}) {
+  constructor(message, { status = 0, retryable = false, limit = null, retryAfter = 0, detail = "" } = {}) {
     super(message);
+    this.detail = detail; // Google's own words, for the black window
     this.status = status;
     this.retryable = retryable;
     this.limit = limit; // "minute" or "day" when a free limit was reached
@@ -66,7 +67,13 @@ async function request(path, key, options = {}) {
   if (status >= 500) {
     throw new AiError("Google's free AI is very busy right now. Wait a moment and try again.", { status, retryable: true });
   }
-  throw new AiError(`Google's AI service returned an error (${status}). Try again in a moment.`, { status });
+  let detail = body.slice(0, 300);
+  try {
+    detail = JSON.parse(body).error.message || detail;
+  } catch {
+    // keep the raw text
+  }
+  throw new AiError(`Google's AI service returned an error (${status}). Try again in a moment.`, { status, detail });
 }
 
 /** Lists models this key may use for chat. */
@@ -149,8 +156,9 @@ async function openStream({ key, model, system, contents, tools, signal }) {
       acceptedThinking.set(model, i);
       return response;
     } catch (error) {
-      // 400 = this model doesn't accept that thinking setting; try the next one.
-      if (!(error instanceof AiError) || error.status !== 400 || i === choices.length - 1) throw error;
+      // A 400 about "thinking" = this model doesn't accept that setting; try the next one.
+      const aboutThinking = /thinking/i.test(error.detail || "");
+      if (!(error instanceof AiError) || error.status !== 400 || !aboutThinking || i === choices.length - 1) throw error;
     }
   }
   throw new AiError("Google's AI service didn't accept the request. Try again in a moment.");

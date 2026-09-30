@@ -146,7 +146,9 @@ export function createAgent({ broadcast, parts, captures }) {
     if (!all.length) throw new AiError("No AI is set up. Add your free Gemini key in Settings.");
     const available = all.filter((c) => (usedUpUntil.get(`${c.provider}:${c.model}`) || 0) < Date.now());
     const minuteWaits = [];
+    let skipGemini = false;
     for (const { provider, model } of available.length ? available : all) {
+      if (skipGemini && provider === "gemini") continue;
       const label = provider === "groq" ? `Backup AI (Groq ${model})` : `Gemini ${model}`;
       for (let attempt = 0; attempt < 2; attempt++) {
         let started = false;
@@ -165,6 +167,16 @@ export function createAgent({ broadcast, parts, captures }) {
           if (provider === "gemini" && models[0] !== model) models = [model, ...models.filter((m) => m !== model)];
           return;
         } catch (error) {
+          if (error instanceof AiError && error.detail) console.log(`  ${label} said: ${error.detail}`);
+          // Google refused this request (400): other Gemini models would too, so go to the backup AI.
+          if (!started && error instanceof AiError && error.status === 400 && provider === "gemini") {
+            lastError = error;
+            if (process.env.GROQ_API_KEY) {
+              skipGemini = true;
+              break;
+            }
+            throw error;
+          }
           if (started || !(error instanceof AiError) || !error.retryable) throw error;
           lastError = error;
           if (error.status === 429) {
@@ -248,6 +260,16 @@ export function createAgent({ broadcast, parts, captures }) {
   async function propose(args) {
     const changes = Array.isArray(args.changes) ? args.changes.slice(0, 20) : [];
     if (!changes.length) return { error: "No changes were given." };
+    // Tidy the AI's wording: "Set_Fill" → "set_fill", "Semi Bold" → "semibold", etc.
+    const tidy = (v) => (typeof v === "string" ? v.trim().toLowerCase().replace(/[\s-]+/g, "_") : v);
+    for (const c of changes) {
+      c.action = tidy(c.action);
+      if (c.side) c.side = tidy(c.side);
+      for (const n of Array.isArray(c.nodes) ? c.nodes : []) {
+        for (const k of ["type", "direction", "align", "cross_align", "text_align"]) if (n[k]) n[k] = tidy(n[k]);
+        if (n.font_weight) n.font_weight = tidy(n.font_weight).replace(/_/g, "");
+      }
+    }
     const open = parts.figmaFile();
     const later = []; // screenshots for a Figma file that isn't open: added when it opens
     const now = [];
