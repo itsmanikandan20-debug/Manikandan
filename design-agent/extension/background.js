@@ -7,7 +7,7 @@ const SERVER = "ws://localhost:3456/ws";
 const STATUS_URL = "http://localhost:3456/api/status";
 // Raise this whenever background.js or manifest.json change, so the helper can ask
 // you to reload the add-on once (Chrome only picks up those two files on reload).
-const CORE_VERSION = 6;
+const CORE_VERSION = 7;
 let socket = null;
 let pingTimer = null;
 let checking = false;
@@ -123,6 +123,7 @@ async function runTool(tool, args) {
   if (tool === "web.screenshot") return screenshot(args);
   if (tool === "web.open_tabs") return openTabs(args);
   if (tool === "web.list_tabs") return listTabs();
+  if (tool === "web.collect_images") return collectImages(args);
   throw new Error(`unknown tool ${tool}`);
 }
 
@@ -144,6 +145,75 @@ async function openTabs({ urls = [] }) {
   }
   await chrome.windows.update(win.id, { focused: true }).catch(() => {});
   return { opened };
+}
+
+/**
+ * Opens a page (like a Dribbble search) in a background tab, collects its big pictures,
+ * downloads them and turns them into PNGs Figma accepts (Figma can't read WebP), then closes the tab.
+ */
+async function collectImages({ url, count = 6, maxWidth = 1200 }) {
+  if (!/^https?:\/\//i.test(String(url || ""))) throw new Error("bad address");
+  const tab = await chrome.tabs.create({ url, active: false });
+  try {
+    let info = await chrome.tabs.get(tab.id);
+    for (let i = 0; i < 40 && info.status !== "complete"; i++) {
+      await wait(500);
+      info = await chrome.tabs.get(tab.id);
+    }
+    await wait(2000); // pages like Dribbble fill in their results after loading
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      args: [count],
+      func: async (wanted) => {
+        const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+        for (let i = 0; i < 3; i++) {
+          window.scrollBy(0, window.innerHeight); // wake up lazy-loaded pictures
+          await pause(700);
+        }
+        window.scrollTo(0, 0);
+        const seen = new Set();
+        const found = [];
+        for (const img of document.images) {
+          const r = img.getBoundingClientRect();
+          if (r.width < 180 || r.height < 120) continue; // icons, avatars, logos
+          let src = img.currentSrc || img.src || img.dataset.src || "";
+          if (img.srcset) {
+            const best = img.srcset.split(",").map((s) => s.trim().split(/\s+/)).map(([u, w]) => ({ u, w: parseInt(w, 10) || 0 })).sort((a, b) => b.w - a.w)[0];
+            if (best && best.u) src = best.u;
+          }
+          if (!src || src.startsWith("data:")) continue;
+          src = new URL(src, location.href).href;
+          if (/avatar|logo|sprite|icon|badge|profile/i.test(src) || seen.has(src)) continue;
+          seen.add(src);
+          const link = img.closest("a");
+          found.push({ src, alt: (img.alt || "").slice(0, 120), link: link ? link.href : location.href });
+          if (found.length >= wanted * 2) break;
+        }
+        return found;
+      },
+    });
+    const candidates = (injection && injection.result) || [];
+    const images = [];
+    for (const c of candidates) {
+      if (images.length >= count) break;
+      try {
+        const response = await fetch(c.src);
+        if (!response.ok) continue;
+        const bitmap = await createImageBitmap(await response.blob());
+        if (bitmap.width < 300) continue;
+        const scale = Math.min(1, maxWidth / bitmap.width);
+        const canvas = new OffscreenCanvas(Math.round(bitmap.width * scale), Math.round(bitmap.height * scale));
+        canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        const blob = await canvas.convertToBlob({ type: "image/png" });
+        images.push({ base64: toBase64(await blob.arrayBuffer()), width: canvas.width, height: canvas.height, src: c.src, alt: c.alt, link: c.link });
+      } catch {
+        // skip pictures that won't download
+      }
+    }
+    return { page: url, found: candidates.length, images };
+  } finally {
+    chrome.tabs.remove(tab.id).catch(() => {});
+  }
 }
 
 /** The website tabs in your Chrome window, left to right. */

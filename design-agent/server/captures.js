@@ -66,7 +66,7 @@ export function createCaptures(root) {
     dir,
 
     /** Saves a screenshot (one or more PNG slices, top to bottom). Returns its entry. */
-    add({ url, title, fullPage, cssWidth, cssHeight, chunks }) {
+    add({ url, title, fullPage, cssWidth, cssHeight, chunks, name }) {
       const number = items.reduce((max, item) => Math.max(max, Number(item.id.slice(3)) || 0), 0) + 1;
       const id = `cap${number}`;
       const files = chunks.map((chunk, i) => {
@@ -77,7 +77,7 @@ export function createCaptures(root) {
       });
       const entry = {
         id,
-        name: niceName(url, fullPage),
+        name: name || niceName(url, fullPage),
         url,
         title,
         fullPage: Boolean(fullPage),

@@ -164,6 +164,31 @@ const SCREENSHOT_TABS_TOOL = {
   },
 };
 
+const SIMILAR_TOOL = {
+  name: "find_similar_designs",
+  description:
+    "Find designs similar to what the user is working on, on the internet (Dribbble by default), and paste them into Figma one by one " +
+    "next to their selected frame, each labelled with its source. Look at their Figma selection first and write a short visual search " +
+    "query: screen type + industry + style, e.g. 'fintech mobile login dark', 'saas pricing page minimal'. Runs in the background; " +
+    "say you're on it and you'll be told when it's done.",
+  parameters: {
+    type: "object",
+    properties: {
+      query: { type: "string" },
+      count: { type: "number", description: "How many (default 6, max 12)" },
+      source: { type: "string", description: "dribbble (default), behance, pinterest or google" },
+    },
+    required: ["query"],
+  },
+};
+
+const DESIGN_SOURCES = {
+  dribbble: (q) => `https://dribbble.com/search/${encodeURIComponent(q)}`,
+  behance: (q) => `https://www.behance.net/search/projects?search=${encodeURIComponent(q)}`,
+  pinterest: (q) => `https://www.pinterest.com/search/pins/?q=${encodeURIComponent(q)}`,
+  google: (q) => `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(q + " ui design")}`,
+};
+
 const LIST_SCREENSHOTS_TOOL = {
   name: "list_screenshots",
   description: "List the screenshots saved in the user's library (newest first): id, name, page address, when, and where each was put in Figma.",
@@ -235,7 +260,7 @@ export function createAgent({ broadcast, parts, captures }) {
   /** The tools the AI can use right now (some need Chrome or Figma to be connected). */
   function toolsNow({ all = false } = {}) {
     const tools = [];
-    if (all || parts.connected("browser")) tools.push(WEB_TOOL, SCREENSHOT_TOOL, SCREENSHOT_TABS_TOOL);
+    if (all || parts.connected("browser")) tools.push(WEB_TOOL, SCREENSHOT_TOOL, SCREENSHOT_TABS_TOOL, SIMILAR_TOOL);
     tools.push(SEARCH_TOOL, OPEN_SITES_TOOL, LIST_SCREENSHOTS_TOOL);
     if (all || parts.connected("figma")) tools.push(FIGMA_TOOL, FIND_TOOL, GOTO_TOOL, DESIGN_TOOL);
     if (all || parts.connected("browser") || parts.connected("figma")) tools.push(MARK_TOOL, CLEAR_MARKS_TOOL);
@@ -672,6 +697,7 @@ export function createAgent({ broadcast, parts, captures }) {
       }
     }
     if (call.name === "screenshot_tabs") return { response: startTabScreenshots(call.args || {}), extra: [] };
+    if (call.name === "find_similar_designs") return { response: startSimilarDesigns(call.args || {}), extra: [] };
     if (call.name === "open_websites") {
       const urls = (call.args || {}).urls || [];
       if (parts.connected("browser")) {
@@ -769,6 +795,74 @@ export function createAgent({ broadcast, parts, captures }) {
     broadcast({ type: "announce", message });
     history.push({ role: "user", parts: [{ text: "(Design Agent note)" }] }, { role: "model", parts: [{ text: message }] });
     history = history.slice(-MAX_HISTORY);
+  }
+
+  function startSimilarDesigns({ query = "", count = 6, source = "dribbble" }) {
+    if (!parts.connected("browser")) return { error: "The Chrome add-on isn't connected (it does the searching)." };
+    if (!String(query).trim()) return { error: "Give a short search query." };
+    if (tabJob) return { error: "I'm still busy with the last batch. I'll say when it's done." };
+    const site = DESIGN_SOURCES[String(source).toLowerCase()] ? String(source).toLowerCase() : "dribbble";
+    tabJob = runSimilarDesigns(String(query).trim(), Math.max(1, Math.min(12, Number(count) || 6)), site)
+      .catch((error) => announce(`Finding similar designs stopped: ${error.message}`))
+      .finally(() => {
+        tabJob = null;
+      });
+    return { started: true, note: "Running in the background. Tell the user in a few words that you're on it; you'll be told when it's done." };
+  }
+
+  async function runSimilarDesigns(query, count, site) {
+    const siteName = site[0].toUpperCase() + site.slice(1);
+    broadcast({ type: "notice", message: `Searching ${siteName} for "${query}"…`, quiet: true });
+    console.log(`  Finding similar designs on ${siteName}: "${query}"`);
+    const url = process.env.DESIGN_SEARCH_URL ? process.env.DESIGN_SEARCH_URL.replace("{q}", encodeURIComponent(query)) : DESIGN_SOURCES[site](query);
+    const found = await parts.call("browser", "web.collect_images", { url, count }, 120000);
+    if (!found.images.length) {
+      return announce(`I couldn't get any designs from ${siteName} for "${query}".${site === "dribbble" ? " Want me to try Behance?" : ""}`);
+    }
+    if (!parts.connected("figma") && parts.ensureFigma) await parts.ensureFigma();
+    let previous = null;
+    let rowStart = null; // three per row, like a moodboard
+    let placed = 0;
+    for (const img of found.images) {
+      const label = (img.alt || query).replace(/\s+/g, " ").slice(0, 60);
+      const shown = Math.min(img.width, 800); // shown at most 800 wide (the image keeps its full detail)
+      const entry = captures.add({
+        url: img.link,
+        title: img.alt,
+        fullPage: false,
+        cssWidth: shown,
+        cssHeight: Math.round((img.height * shown) / img.width),
+        chunks: [{ base64: img.base64, width: img.width, height: img.height }],
+        name: `Inspiration – ${siteName} – ${label}`,
+      });
+      if (!parts.connected("figma")) continue;
+      broadcast({ type: "notice", message: `Pasting ${placed + 1} of ${found.images.length} into Figma…`, quiet: true });
+      const change = {
+        action: "place_screenshot",
+        capture_id: entry.id,
+        capture: { name: entry.name, css_width: entry.cssWidth, css_height: entry.cssHeight },
+        ...(!previous
+          ? { side: "right", gap: 120 }
+          : placed % 3 === 0
+            ? { near_id: rowStart, side: "below", gap: 80 }
+            : { near_id: previous, side: "right", gap: 80 }),
+      };
+      try {
+        const result = await parts.call("figma", "figma.apply", { changes: [{ ...change, images: captures.load(entry) }] }, 60000);
+        const r = result.results[0];
+        if (r && r.ok && r.created) {
+          captures.markPlaced(entry.id, r.created, result.file || "", r.page);
+          if (placed % 3 === 0) rowStart = r.created;
+          previous = r.created;
+          placed++;
+          lastApplied = { token: result.token, summary: `Add ${entry.name}` };
+        }
+      } catch (error) {
+        console.log(`  Couldn't paste ${entry.name}: ${error.message}`);
+      }
+    }
+    if (!parts.connected("figma")) return announce(`I found ${found.images.length} designs and saved them, but Figma isn't connected. Run the plugin and say "put them in Figma".`);
+    return announce(`Done: ${placed} similar design${placed === 1 ? "" : "s"} from ${siteName} are in Figma, next to your frame.`);
   }
 
   async function runTabScreenshots({ which, fullPage, toFigma, figmaFile }) {

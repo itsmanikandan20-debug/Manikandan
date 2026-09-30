@@ -79,6 +79,15 @@ never blocks your clicks, and disappears a few seconds after it finishes.
 
 This needs the **Chrome add-on**, installed once (below).
 
+## Find similar designs on the internet
+
+Select a frame in Figma and say **"Find similar designs on the internet and paste
+them in Figma"**. It looks at your frame, searches **Dribbble** for designs like it
+(in a hidden Chrome tab, so your screen doesn't change), and pastes them **one by
+one** next to your frame in rows of three, each named "Inspiration – Dribbble – …".
+Say **"find 10"** for more, or **"on Behance"** / **"on Pinterest"** for another site.
+They're for inspiration: don't copy other people's work into your final designs.
+
 ## Reviews: it marks the problems on your screen
 
 Say **"Review this page"**, **"Any UX corrections?"**, **"Check the content"** or
