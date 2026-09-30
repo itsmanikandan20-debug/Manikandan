@@ -5,28 +5,122 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Design Agent</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700&family=Figtree:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;800&family=Nunito:wght@400;600;700&display=swap">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body class="text-hidden">
-  <main class="helper">
-    <header class="head">
-      <div class="title-row">
-        <div class="title"><i class="logo"></i>Design Agent</div>
-        <div class="actions">
-          <button type="button" id="text-toggle" class="icon-btn" aria-pressed="false">Show text</button>
-          <button type="button" id="settings-btn" class="icon-btn" aria-expanded="false">Settings</button>
-        </div>
-      </div>
-      <div class="status">
+  <canvas id="snow" aria-hidden="true"></canvas>
+  <main class="agent">
+    <header class="bar">
+      <div class="status" aria-label="Connections">
         <span id="st-ai" class="pill">AI</span>
         <span id="st-browser" class="pill">Chrome</span>
         <span id="st-figma" class="pill">Figma</span>
       </div>
+      <div class="tools">
+        <button type="button" id="text-toggle" class="tool" aria-pressed="false" title="Show the conversation">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        </button>
+        <button type="button" id="settings-btn" class="tool" aria-expanded="false" title="Settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </div>
     </header>
 
-    <section id="setup" class="panel" hidden>
-      <h2>Add your free AI key</h2>
+    <section class="stage" aria-live="polite">
+      <button type="button" id="orb" class="orb" data-state="off" aria-label="Start talking">
+        <span class="halo"></span>
+        <span class="ring"></span>
+        <svg class="penguin" viewBox="0 0 200 200" aria-hidden="true">
+          <ellipse class="shadow" cx="100" cy="186" rx="52" ry="7"/>
+          <g class="body-group">
+            <!-- flippers -->
+            <ellipse class="flipper flipper-l" cx="48" cy="120" rx="12" ry="30" transform="rotate(22 48 120)"/>
+            <ellipse class="flipper flipper-r" cx="152" cy="120" rx="12" ry="30" transform="rotate(-22 152 120)"/>
+            <!-- body and belly -->
+            <path class="body" d="M100 42c-38 0-58 30-58 70 0 42 22 68 58 68s58-26 58-68c0-40-20-70-58-70z"/>
+            <path class="belly" d="M100 92c-24 0-38 20-38 44 0 26 14 40 38 40s38-14 38-40c0-24-14-44-38-44z"/>
+            <!-- face -->
+            <path class="face" d="M100 60c-22 0-36 12-36 30 0 14 12 22 36 22s36-8 36-22c0-18-14-30-36-30z"/>
+            <ellipse class="cheek" cx="72" cy="104" rx="7" ry="4"/>
+            <ellipse class="cheek" cx="128" cy="104" rx="7" ry="4"/>
+            <!-- round glasses -->
+            <g class="glasses">
+              <circle cx="82" cy="86" r="15"/>
+              <circle cx="118" cy="86" r="15"/>
+              <path d="M97 85q3-3 6 0" fill="none" stroke-width="3"/>
+              <circle class="glint" cx="77" cy="81" r="3.5"/>
+              <circle class="glint" cx="113" cy="81" r="3.5"/>
+            </g>
+            <!-- beak -->
+            <path class="beak beak-top" d="M91 101h18l-9 7z"/>
+            <path class="beak beak-bottom" d="M93 107h14l-7 6z"/>
+            <!-- hard hat -->
+            <g class="hat">
+              <path class="hat-dome" d="M58 58c2-24 20-38 42-38s40 14 42 38z"/>
+              <path class="hat-ridge" d="M96 22h8v36h-8z"/>
+              <rect class="hat-brim" x="50" y="54" width="100" height="10" rx="5"/>
+              <circle class="hat-light" cx="100" cy="40" r="6"/>
+            </g>
+            <!-- laptop -->
+            <g class="laptop">
+              <rect x="66" y="140" width="68" height="40" rx="5"/>
+              <circle cx="100" cy="160" r="5" class="laptop-logo"/>
+            </g>
+            <!-- feet -->
+            <ellipse class="foot" cx="80" cy="182" rx="14" ry="6"/>
+            <ellipse class="foot" cx="120" cy="182" rx="14" ry="6"/>
+          </g>
+          <!-- thinking dots and sleepy z's -->
+          <g class="dots"><circle cx="150" cy="30" r="5"/><circle cx="166" cy="22" r="6"/><circle cx="184" cy="14" r="7"/></g>
+          <g class="zzz"><text x="146" y="44">z</text><text x="160" y="28">z</text></g>
+        </svg>
+        <img id="avatar-img" class="avatar" alt="" hidden>
+      </button>
+      <p id="voice-state" class="voice-state">Tap me to talk</p>
+      <p id="caption" class="caption">Try: “Review this page” or “Create a login wireframe”</p>
+      <p id="problem" class="problem" role="alert" hidden></p>
+    </section>
+
+    <div class="cards">
+      <div id="shot" class="card shot" hidden>
+        <img id="shot-img" alt="">
+        <div><p class="shot-kind">Screenshot saved</p><p id="shot-name" class="shot-name"></p></div>
+      </div>
+      <div id="approval" class="card approval" hidden>
+        <p id="approval-kind" class="approval-kind">Change needs your OK</p>
+        <p id="approval-summary" class="approval-summary"></p>
+        <ul id="approval-lines" class="approval-lines"></ul>
+        <p id="approval-problems" class="approval-problems" hidden></p>
+        <div id="approval-actions" class="approval-actions">
+          <button type="button" id="approve-btn" class="primary">Apply</button>
+          <button type="button" id="reject-btn" class="ghost">Not now</button>
+        </div>
+        <p id="approval-state" class="approval-state" hidden></p>
+        <p id="approval-hint" class="approval-hint">Or just say “yes” or “no”.</p>
+      </div>
+    </div>
+
+    <form id="composer" class="composer">
+      <label for="text" class="sr">Message</label>
+      <textarea id="text" rows="1" placeholder="Type instead…"></textarea>
+      <button type="submit" id="send" class="send" title="Send" aria-label="Send">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l16-8-6 16-3-6z" fill="currentColor"/></svg>
+      </button>
+    </form>
+
+    <!-- Sheets that slide over the agent -->
+    <section id="chat" class="sheet chat" aria-live="polite">
+      <div class="sheet-head"><h2>Conversation</h2></div>
+      <div id="empty" class="empty">
+        <p>Your conversation appears here as text.</p>
+        <button type="button" class="suggest">How do I make a call-to-action button stand out?</button>
+        <button type="button" class="suggest">What's a good spacing system for a landing page?</button>
+      </div>
+    </section>
+
+    <section id="setup" class="sheet panel" hidden>
+      <div class="sheet-head"><h2>Add your free AI key</h2><button type="button" class="close" id="setup-close" aria-label="Close">×</button></div>
       <p>Design Agent uses Google Gemini, which is free. You only do this once.</p>
       <ol>
         <li>Open <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> and sign in with Google.</li>
@@ -42,8 +136,16 @@
       <p class="small">Your key is saved only on this computer, in the <code>.env</code> file.</p>
     </section>
 
-    <section id="settings" class="panel" hidden>
-      <h2>Settings</h2>
+    <section id="settings" class="sheet panel" hidden>
+      <div class="sheet-head"><h2>Settings</h2><button type="button" class="close" id="settings-close" aria-label="Close">×</button></div>
+
+      <label for="avatar-file">Character picture</label>
+      <div class="row">
+        <input id="avatar-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif">
+        <button type="button" id="avatar-reset" class="ghost">Use the penguin</button>
+      </div>
+      <p id="avatar-msg" class="form-msg" role="status"></p>
+
       <label for="set-lang">Your accent (helps it understand you)</label>
       <select id="set-lang">
         <option value="en-IN">English (India)</option>
@@ -54,63 +156,24 @@
       <label for="set-voice">Its voice</label>
       <div class="row">
         <select id="set-voice"></select>
-        <button type="button" id="test-voice" class="icon-btn">Test</button>
+        <button type="button" id="test-voice" class="ghost">Test</button>
       </div>
       <p id="voice-hint" class="small"></p>
       <label for="set-rate">Speaking speed: <span id="rate-value"></span></label>
       <input id="set-rate" type="range" min="0.8" max="1.4" step="0.05">
+
+      <label class="check"><input type="checkbox" id="set-ask"> Ask me before changing my Figma design (otherwise it just does what I ask; I can always say “undo”)</label>
+      <label class="check" id="autostart-row"><input type="checkbox" id="set-autostart"> Start the Figma plugin by itself (presses Ctrl + Alt + P in Figma for you)</label>
+
       <div class="backups">
         <p class="backups-title">Backup AIs (free) — used in this order when Gemini runs out, is busy or refuses</p>
         <div id="backup-list"></div>
       </div>
-      <label class="check" id="autostart-row"><input type="checkbox" id="set-autostart"> Start the Figma plugin by itself (presses Ctrl + Alt + P in Figma for you)</label>
       <div class="row">
-        <button type="button" id="key-btn" class="icon-btn">Change AI key</button>
-        <button type="button" id="new-chat" class="icon-btn">Start a new conversation</button>
+        <button type="button" id="key-btn" class="ghost">Change Gemini key</button>
+        <button type="button" id="new-chat" class="ghost">New conversation</button>
       </div>
     </section>
-
-    <section class="stage" aria-live="polite">
-      <button type="button" id="orb" class="orb" data-state="off" aria-label="Start talking">
-        <span class="orb-core">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
-        </span>
-        <span class="ring"></span>
-      </button>
-      <p id="voice-state" class="voice-state">Tap to start talking</p>
-      <p id="caption" class="caption">Try saying: “How do I make a button stand out?”</p>
-      <p id="problem" class="problem" role="alert" hidden></p>
-      <div id="shot" class="shot" hidden>
-        <img id="shot-img" alt="">
-        <div><p class="shot-kind">Screenshot saved</p><p id="shot-name" class="shot-name"></p></div>
-      </div>
-      <div id="approval" class="approval" hidden>
-        <p id="approval-kind" class="approval-kind">Change needs your OK</p>
-        <p id="approval-summary" class="approval-summary"></p>
-        <ul id="approval-lines" class="approval-lines"></ul>
-        <p id="approval-problems" class="approval-problems" hidden></p>
-        <div id="approval-actions" class="approval-actions">
-          <button type="button" id="approve-btn" class="primary">Apply</button>
-          <button type="button" id="reject-btn" class="icon-btn">Not now</button>
-        </div>
-        <p id="approval-state" class="approval-state" hidden></p>
-        <p id="approval-hint" class="approval-hint">Or just say “yes” or “no”.</p>
-      </div>
-    </section>
-
-    <section id="chat" class="chat" aria-live="polite">
-      <div id="empty" class="empty">
-        <p>Your conversation appears here as text.</p>
-        <button type="button" class="suggest">How do I make a call-to-action button stand out?</button>
-        <button type="button" class="suggest">What's a good spacing system for a landing page?</button>
-      </div>
-    </section>
-
-    <form id="composer" class="composer">
-      <label for="text" class="sr">Message</label>
-      <textarea id="text" rows="1" placeholder="Or type here…"></textarea>
-      <button type="submit" id="send" class="primary">Send</button>
-    </form>
   </main>
   <script src="/voice.js"></script>
   <script src="/app.js"></script>

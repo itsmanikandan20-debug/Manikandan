@@ -3,7 +3,7 @@
 // Figma plugin) connects to it over a WebSocket at ws://localhost:PORT/ws.
 import http from "node:http";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,8 +43,14 @@ function connections() {
     browserNeedsReload: clients.browser.size > 0 && extensionNeedsReload,
   };
 }
+const AVATAR_FILE = path.join(ROOT, "data", "avatar");
 function settings() {
-  return { autoStartFigma: process.env.AUTO_START_FIGMA !== "off", autoStartSupported: process.platform === "win32" };
+  return {
+    autoStartFigma: process.env.AUTO_START_FIGMA !== "off",
+    autoStartSupported: process.platform === "win32",
+    askBeforeChanges: process.env.ASK_BEFORE_CHANGES === "on",
+    hasAvatar: existsSync(AVATAR_FILE),
+  };
 }
 function broadcastStatus() {
   broadcast({ type: "status", ...agent.status(), connections: connections(), settings: settings() });
@@ -148,11 +154,11 @@ const agent = createAgent({ broadcast, parts, captures });
 // ---------- web server ----------
 const TYPES = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png" };
 
-async function readJson(req) {
+async function readJson(req, limit = 1e6) {
   let body = "";
   for await (const chunk of req) {
     body += chunk;
-    if (body.length > 1e6) throw new Error("too large");
+    if (body.length > limit) throw new Error("too large");
   }
   return JSON.parse(body || "{}");
 }
@@ -223,6 +229,34 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       const message = error instanceof AiError ? error.message : "Couldn't check the key. Try again.";
       return json(res, 400, { ok: false, error: message });
+    }
+  }
+
+  // The character's picture (optional; the penguin is used otherwise).
+  if (url.pathname === "/avatar") {
+    try {
+      const saved = JSON.parse(readFileSync(AVATAR_FILE, "utf8"));
+      res.writeHead(200, { "content-type": saved.type, "cache-control": "no-cache" });
+      return res.end(Buffer.from(saved.data, "base64"));
+    } catch {
+      return json(res, 404, { ok: false });
+    }
+  }
+  if (url.pathname === "/api/avatar" && req.method === "POST") {
+    try {
+      const body = await readJson(req, 5e6);
+      if (body.remove) {
+        rmSync(AVATAR_FILE, { force: true });
+      } else {
+        const match = String(body.image || "").match(/^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$/);
+        if (!match) return json(res, 400, { ok: false, error: "Please choose a PNG, JPG, WebP or GIF picture." });
+        mkdirSync(path.dirname(AVATAR_FILE), { recursive: true });
+        writeFileSync(AVATAR_FILE, JSON.stringify({ type: match[1], data: match[2] }));
+      }
+      broadcastStatus();
+      return json(res, 200, { ok: true });
+    } catch {
+      return json(res, 400, { ok: false, error: "Couldn't save that picture." });
     }
   }
 
@@ -326,6 +360,10 @@ wss.on("connection", (socket) => {
       if (message.type === "undo") agent.undoLast();
       if (message.type === "setting" && typeof message.autoStartFigma === "boolean") {
         saveEnvValue(ENV_FILE, "AUTO_START_FIGMA", message.autoStartFigma ? "on" : "off");
+        broadcastStatus();
+      }
+      if (message.type === "setting" && typeof message.askBeforeChanges === "boolean") {
+        saveEnvValue(ENV_FILE, "ASK_BEFORE_CHANGES", message.askBeforeChanges ? "on" : "off");
         broadcastStatus();
       }
       // The helper window says when to move the pointer (in time with the voice).

@@ -1,5 +1,5 @@
 // Opens the helper window as a small app-style window (no tabs, no address bar).
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
@@ -20,11 +20,31 @@ function findBrowser() {
   return null;
 }
 
+const WIDTH = 360;
+const HEIGHT = 540;
+
+/** Bottom-right corner of the main screen (Windows), so the helper sits out of the way. */
+function cornerPosition() {
+  if (process.platform !== "win32") return null;
+  try {
+    const script = "Add-Type -AssemblyName System.Windows.Forms; $a=[System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea; Write-Output \"$($a.Right) $($a.Bottom)\"";
+    const out = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", timeout: 4000, windowsHide: true });
+    const [right, bottom] = String(out.stdout || "").trim().split(/\s+/).map(Number);
+    if (!right || !bottom) return null;
+    return { x: Math.max(0, right - WIDTH - 24), y: Math.max(0, bottom - HEIGHT - 24) };
+  } catch {
+    return null;
+  }
+}
+
 export function openWindow(url) {
   const browser = findBrowser();
   try {
     if (browser) {
-      spawn(browser, [`--app=${url}`, "--window-size=420,760"], { detached: true, stdio: "ignore" }).unref();
+      const args = [`--app=${url}`, `--window-size=${WIDTH},${HEIGHT}`];
+      const corner = cornerPosition();
+      if (corner) args.push(`--window-position=${corner.x},${corner.y}`);
+      spawn(browser, args, { detached: true, stdio: "ignore" }).unref();
     } else if (process.platform === "win32") {
       spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" }).unref();
     } else {

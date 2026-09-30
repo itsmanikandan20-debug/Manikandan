@@ -7,7 +7,8 @@ import { AiError, listChatModels, rankModels, streamChat } from "../ai/gemini.js
 import { BACKUPS, pickBackupModel, streamBackup } from "../ai/backups.js";
 import { randomUUID } from "node:crypto";
 import { SYSTEM_PROMPT } from "./prompt.js";
-import { CHANGE_TOOL, DESIGN_TOOL, classifyReply } from "./approvals.js";
+import { openInChrome, searchWeb } from "../web.js";
+import { CHANGE_TOOL, DESIGN_TOOL, classifyReply, isDirectRequest } from "./approvals.js";
 
 const MAX_HISTORY = 40; // messages kept for context (always an even number: question + answer)
 const MAX_MODELS_TO_TRY = 6; // when Google is busy, try up to this many models
@@ -80,6 +81,34 @@ const OPEN_FILE_TOOL = {
   parameters: { type: "object", properties: { file: { type: "string" } }, required: ["file"] },
 };
 
+const SEARCH_TOOL = {
+  name: "search_web",
+  description:
+    "Search the internet. Returns results (title, address, snippet), sometimes with a short answer. " +
+    "Use it for any question about the world, companies, trends, examples or anything you'd need to look up, " +
+    "and to find websites to open.",
+  parameters: {
+    type: "object",
+    properties: {
+      query: { type: "string" },
+      count: { type: "number", description: "How many results (default 8, max 20)" },
+    },
+    required: ["query"],
+  },
+};
+
+const OPEN_SITES_TOOL = {
+  name: "open_websites",
+  description:
+    "Open web addresses as new tabs in the user's Chrome (up to 15). Use it when they ask you to open a site, " +
+    "or to open several sites (find them with search_web first). No approval needed.",
+  parameters: {
+    type: "object",
+    properties: { urls: { type: "array", items: { type: "string" }, description: "Full addresses starting with https://" } },
+    required: ["urls"],
+  },
+};
+
 const LIST_SCREENSHOTS_TOOL = {
   name: "list_screenshots",
   description: "List the screenshots saved in the user's library (newest first): id, name, page address, when, and where each was put in Figma.",
@@ -147,7 +176,7 @@ export function createAgent({ broadcast, parts, captures }) {
   async function* streamTurn(contents, waitedOnce = false) {
     const tools = [];
     if (parts.connected("browser")) tools.push(WEB_TOOL, SCREENSHOT_TOOL);
-    tools.push(LIST_SCREENSHOTS_TOOL);
+    tools.push(SEARCH_TOOL, OPEN_SITES_TOOL, LIST_SCREENSHOTS_TOOL);
     if (parts.connected("figma")) tools.push(FIGMA_TOOL, FIND_TOOL, GOTO_TOOL, DESIGN_TOOL);
     tools.push(CHANGE_TOOL, OPEN_FILE_TOOL); // changes can also be for a file that isn't open yet
     let lastError;
@@ -270,6 +299,7 @@ export function createAgent({ broadcast, parts, captures }) {
 
   // ---------- proposals and approval ----------
   let pending = null; // { id, summary, changes, lines, problems } waiting for the user's yes
+  let currentRequest = ""; // what the user just said (a direct request is its own approval)
   let lastApplied = null; // { token, summary } so "undo" can put it back
 
   async function propose(args) {
@@ -320,10 +350,32 @@ export function createAgent({ broadcast, parts, captures }) {
     if (!lines.length) return { error: "None of these changes can be made: " + preview.problems.join("; ") };
 
     if (pending) broadcast({ type: "approval_update", id: pending.id, state: "replaced" });
+    const direct = process.env.ASK_BEFORE_CHANGES !== "on" && isDirectRequest(currentRequest);
     // Only the changes that passed the check will be applied.
     const doable = now.filter((c, i) => !preview.valid || preview.valid[i]).concat(later);
     pending = { id: randomUUID(), summary: String(args.summary || "Change the design"), changes: doable, lines, problems: preview.problems };
-    broadcast({ type: "approval", id: pending.id, summary: pending.summary, lines: pending.lines, problems: pending.problems });
+    broadcast({ type: "approval", id: pending.id, summary: pending.summary, lines: pending.lines, problems: pending.problems, direct });
+
+    // The user asked for this themselves ("make the title bigger"): their request is the
+    // approval, so do it now. They can still say "undo".
+    if (direct) {
+      const proposal = pending;
+      pending = null;
+      console.log(`  Doing it (asked directly): ${proposal.summary}`);
+      try {
+        const { result, failed, laterFile } = await applyProposal(proposal, proposal.id);
+        if (!result) return { status: "will_be_added_later", file: laterFile, note: `Tell them in one short sentence it'll appear when they open "${laterFile}".` };
+        return {
+          status: "done",
+          changed: proposal.lines,
+          failed: failed.map((f) => `${f.change} ${f.id}: ${f.error}`),
+          layers_now: result.after,
+          note: "It's done. Confirm in one short sentence (point at it). Don't ask for permission; they can say undo.",
+        };
+      } catch (error) {
+        return { error: `Couldn't make the change in Figma: ${error.message}` };
+      }
+    }
     console.log(`  Waiting for approval: ${pending.summary}`);
     return {
       status: "waiting_for_user_approval",
@@ -392,6 +444,28 @@ export function createAgent({ broadcast, parts, captures }) {
       delete design.summary;
       const summary = args.summary || `Create ${design.style === "styled" ? "a design" : "a wireframe"}: ${args.name || "new screen"}`;
       return { response: await propose({ summary, changes: [design] }), extra: [] };
+    }
+    if (call.name === "search_web") {
+      const { query = "", count = 8 } = call.args || {};
+      broadcast({ type: "notice", message: `Searching: ${query}`, quiet: true });
+      try {
+        const gemini = process.env.GEMINI_API_KEY && models && models.length ? { key: process.env.GEMINI_API_KEY, model: models[0] } : null;
+        const found = await searchWeb(String(query), count, gemini);
+        console.log(`  Searched "${query}" (${found.results.length} results via ${found.via})`);
+        return { response: found, extra: [] };
+      } catch (error) {
+        return { response: { error: `Couldn't search: ${error.message}` }, extra: [] };
+      }
+    }
+    if (call.name === "open_websites") {
+      try {
+        const opened = openInChrome((call.args || {}).urls || []);
+        console.log(`  Opened ${opened.length} site(s) in Chrome`);
+        broadcast({ type: "notice", message: `Opened ${opened.length} site${opened.length > 1 ? "s" : ""} in Chrome`, quiet: true });
+        return { response: { opened }, extra: [] };
+      } catch (error) {
+        return { response: { error: error.message }, extra: [] };
+      }
     }
     if (call.name === "take_screenshot") return { response: await takeScreenshot(Boolean((call.args || {}).full_page)), extra: [] };
     if (call.name === "list_screenshots") {
@@ -462,6 +536,42 @@ export function createAgent({ broadcast, parts, captures }) {
   }
 
   /** ACT, then VERIFY. Only reachable from the user's own click or clear "yes". */
+  /**
+   * ACT: carries out a proposal in Figma. Screenshots for a file that isn't open are
+   * remembered instead. Returns { result, failed, laterFile } (result is null if nothing ran now).
+   */
+  async function applyProposal(proposal, id) {
+    const later = proposal.changes.filter((c) => c.figma_file);
+    for (const c of later) captures.addDelivery(c, c.figma_file);
+    const now = proposal.changes.filter((c) => !c.figma_file);
+    const laterFile = later.length ? later[0].figma_file : null;
+    if (!now.length) {
+      broadcast({ type: "approval_update", id, state: "applied", failed: 0 });
+      return { result: null, failed: [], laterFile };
+    }
+    broadcast({ type: "approval_update", id, state: "applying" });
+    // Add the screenshot images now that it's going ahead.
+    const changes = now.map((c) => {
+      if (c.action !== "place_screenshot") return c;
+      const entry = captures.get(c.capture_id);
+      return entry ? { ...c, images: captures.load(entry) } : c;
+    });
+    let result;
+    try {
+      result = await parts.call("figma", "figma.apply", { changes }, 60000);
+    } catch (error) {
+      broadcast({ type: "approval_update", id, state: "failed" });
+      throw error;
+    }
+    const failed = result.results.filter((r) => !r.ok);
+    for (const r of result.results) if (r.ok && r.capture_id && r.created) captures.markPlaced(r.capture_id, r.created, result.file || "", r.page);
+    lastApplied = { token: result.token, summary: proposal.summary };
+    broadcast({ type: "approval_update", id, state: "applied", failed: failed.length });
+    console.log(`  Applied: ${proposal.summary}${failed.length ? ` (${failed.length} failed)` : ""}`);
+    return { result, failed, laterFile };
+  }
+
+  /** ACT, then VERIFY. Only reachable from the user's own click or clear "yes". */
   async function approve(id, userText = null) {
     if (!pending || pending.id !== id) {
       broadcast({ type: "approval_update", id, state: "expired" });
@@ -471,47 +581,28 @@ export function createAgent({ broadcast, parts, captures }) {
     const proposal = pending;
     pending = null;
 
-    // Screenshots for a file that isn't open: remember them; they're added when it opens.
-    const later = proposal.changes.filter((c) => c.figma_file);
-    for (const c of later) captures.addDelivery(c, c.figma_file);
-    proposal.changes = proposal.changes.filter((c) => !c.figma_file);
-    if (!proposal.changes.length) {
-      broadcast({ type: "approval_update", id, state: "applied", failed: 0 });
-      const file = later[0].figma_file;
-      sayDirect(userText, `Okay. I'll add it to "${file}" the moment you open that file in Figma, with the Design Agent plugin running.`);
-      return;
-    }
-
     busy = true;
-    broadcast({ type: "approval_update", id, state: "applying" });
-    let result;
+    let outcome;
     try {
-      // Add the screenshot images now that it's approved.
-      const changes = proposal.changes.map((c) => {
-        if (c.action !== "place_screenshot") return c;
-        const entry = captures.get(c.capture_id);
-        return entry ? { ...c, images: captures.load(entry) } : c;
-      });
-      result = await parts.call("figma", "figma.apply", { changes }, 60000);
+      outcome = await applyProposal(proposal, id);
     } catch (error) {
       busy = false;
-      broadcast({ type: "approval_update", id, state: "failed" });
       sayDirect(userText, `Sorry, I couldn't make the change in Figma: ${error.message}.`);
       return;
     }
     busy = false;
-    const failed = result.results.filter((r) => !r.ok);
-    for (const r of result.results) if (r.ok && r.capture_id && r.created) captures.markPlaced(r.capture_id, r.created, result.file || "", r.page);
-    lastApplied = { token: result.token, summary: proposal.summary };
-    broadcast({ type: "approval_update", id, state: "applied", failed: failed.length });
-    console.log(`  Applied: ${proposal.summary}${failed.length ? ` (${failed.length} failed)` : ""}`);
+    if (!outcome.result) {
+      sayDirect(userText, `Okay. I'll add it to "${outcome.laterFile}" the moment you open that file in Figma.`);
+      return;
+    }
+    const { result } = outcome;
 
     // VERIFY: let the AI look at the result and report back briefly.
     const report =
       `[The user approved "${proposal.summary}", and it has now been applied in Figma.]\n` +
       `Results: ${result.results.map((r) => `${r.change} ${r.id}: ${r.ok ? "done" : "FAILED (" + r.error + ")"}`).join("; ")}\n` +
       `The changed layers now:\n${result.after}\n` +
-      "In one or two short sentences, confirm what changed (point at it) and whether it now looks right. " +
+      "In one short sentence, confirm what changed (point at it). " +
       "If something failed, say what and why. Don't propose another change unless they ask.";
     const extra = result.screenshot ? [{ inlineData: { mimeType: "image/jpeg", data: result.screenshot } }] : [];
     await runTurn({ userText: userText, promptText: report, extraParts: extra, historyText: `${userText || "(clicked Apply)"} [approved: ${proposal.summary}]`, observe: false });
@@ -581,6 +672,7 @@ export function createAgent({ broadcast, parts, captures }) {
    */
   async function runTurn({ userText, promptText, extraParts = [], historyText, observe }) {
     busy = true;
+    currentRequest = userText || "";
     if (userText) broadcast({ type: "message", role: "user", text: userText });
     broadcast({ type: "agent_start" });
 

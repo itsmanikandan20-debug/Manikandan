@@ -19,8 +19,8 @@
   let waitingToSend = null; // something you said while it was still answering
 
   const STATE_LABEL = {
-    off: "Tap to start talking",
-    listening: "Listening… just talk",
+    off: "Tap me to talk",
+    listening: "I'm listening…",
     hearing: "Listening…",
     thinking: "Thinking…",
     speaking: "Speaking… (talk to interrupt)",
@@ -82,8 +82,9 @@
   // ---------- show / hide text ----------
   function setTextVisible(visible) {
     document.body.classList.toggle("text-hidden", !visible);
-    $("text-toggle").textContent = visible ? "Hide text" : "Show text";
+    $("text-toggle").title = visible ? "Hide the conversation" : "Show the conversation";
     $("text-toggle").setAttribute("aria-pressed", String(visible));
+    if (visible) closeSheets("chat");
     try {
       localStorage.setItem("design-agent-text", visible ? "1" : "0");
     } catch {
@@ -143,14 +144,71 @@
   });
   $("test-voice").addEventListener("click", () => voice.say("Hi! This is how I sound. Does this voice work for you?"));
 
+  /** Only one sheet (conversation, settings, key) is open at a time. */
+  function closeSheets(except) {
+    if (except !== "settings") {
+      settingsPanel.hidden = true;
+      $("settings-btn").setAttribute("aria-expanded", "false");
+    }
+    if (except !== "setup") setup.hidden = true;
+    if (except !== "chat" && !document.body.classList.contains("text-hidden")) setTextVisible(false);
+  }
   $("settings-btn").addEventListener("click", () => {
-    settingsPanel.hidden = !settingsPanel.hidden;
-    $("settings-btn").setAttribute("aria-expanded", String(!settingsPanel.hidden));
+    const open = settingsPanel.hidden;
+    closeSheets(open ? "settings" : "");
+    settingsPanel.hidden = !open;
+    $("settings-btn").setAttribute("aria-expanded", String(open));
   });
+  $("settings-close").addEventListener("click", () => closeSheets(""));
+  $("setup-close").addEventListener("click", () => closeSheets(""));
   $("key-btn").addEventListener("click", () => {
-    settingsPanel.hidden = true;
+    closeSheets("setup");
     setup.hidden = false;
     $("key-input").focus();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeSheets("");
+  });
+
+  // ---------- the character's picture ----------
+  function showAvatar(has) {
+    orb.classList.toggle("custom", Boolean(has));
+    $("avatar-img").hidden = !has;
+    if (has) $("avatar-img").src = "/avatar?v=" + Date.now();
+  }
+  async function sendAvatar(body) {
+    const msg = $("avatar-msg");
+    try {
+      const response = await fetch("/api/avatar", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-design-agent": "1" },
+        body: JSON.stringify(body),
+      });
+      const result = await response.json();
+      msg.className = "form-msg " + (result.ok ? "good" : "bad");
+      msg.textContent = result.ok ? (body.remove ? "Back to the penguin." : "Saved.") : result.error;
+      if (result.ok) showAvatar(!body.remove);
+    } catch {
+      msg.className = "form-msg bad";
+      msg.textContent = "Design Agent isn't running. Start it again and retry.";
+    }
+  }
+  $("avatar-file").addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    if (file.size > 3 * 1024 * 1024) {
+      $("avatar-msg").className = "form-msg bad";
+      $("avatar-msg").textContent = "That picture is too big (over 3 MB). Try a smaller one.";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => sendAvatar({ image: reader.result });
+    reader.readAsDataURL(file);
+  });
+  $("avatar-reset").addEventListener("click", () => sendAvatar({ remove: true }));
+
+  $("set-ask").addEventListener("change", (e) => {
+    if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "setting", askBeforeChanges: e.target.checked }));
   });
   $("new-chat").addEventListener("click", () => {
     if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "reset" }));
@@ -263,6 +321,8 @@
     if (!settings) return;
     $("autostart-row").hidden = !settings.autoStartSupported;
     $("set-autostart").checked = settings.autoStartFigma;
+    $("set-ask").checked = Boolean(settings.askBeforeChanges);
+    if (settings.hasAvatar !== undefined && settings.hasAvatar !== orb.classList.contains("custom")) showAvatar(settings.hasAvatar);
   }
   $("set-autostart").addEventListener("change", (e) => {
     if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "setting", autoStartFigma: e.target.checked }));
@@ -272,7 +332,7 @@
     showSettings(status.settings);
     backupStatus = status.backups || {};
     renderBackupStates();
-    setup.hidden = status.hasKey;
+    if (!status.hasKey) setup.hidden = false; // first start: ask for the key
     $("st-ai").classList.toggle("on", status.hasKey);
     $("st-ai").textContent = status.hasKey ? "AI ready" : "AI: needs key";
     $("st-ai").title = status.model ? "Model: " + status.model : "";
@@ -520,6 +580,39 @@
       save.disabled = false;
     }
   });
+
+  // ---------- gentle snow ----------
+  (function snow() {
+    const canvas = $("snow");
+    const ctx = canvas.getContext && canvas.getContext("2d");
+    if (!ctx || (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches)) return;
+    let flakes = [];
+    function size() {
+      canvas.width = innerWidth;
+      canvas.height = innerHeight;
+      flakes = Array.from({ length: Math.round((innerWidth * innerHeight) / 9000) }, () => ({
+        x: Math.random() * innerWidth, y: Math.random() * innerHeight,
+        r: Math.random() * 1.8 + 0.6, s: Math.random() * 0.35 + 0.15, d: Math.random() * 6.28,
+      }));
+    }
+    function frame() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "rgba(235, 244, 255, 0.55)";
+      for (const f of flakes) {
+        f.y += f.s;
+        f.d += 0.01;
+        f.x += Math.sin(f.d) * 0.2;
+        if (f.y > canvas.height + 4) { f.y = -4; f.x = Math.random() * canvas.width; }
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, f.r, 0, 6.283);
+        ctx.fill();
+      }
+      requestAnimationFrame(frame);
+    }
+    size();
+    addEventListener("resize", size);
+    requestAnimationFrame(frame);
+  })();
 
   connect();
 })();

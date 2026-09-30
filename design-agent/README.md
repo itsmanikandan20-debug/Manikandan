@@ -9,6 +9,26 @@ An AI UX/UI design partner that sits beside you while you work. It runs on
 > **change your Figma design after you say yes**. It also takes **screenshots**
 > of websites and puts them into Figma. Finding and moving screenshots comes next. The full plan is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+## The helper window
+
+A small window in the bottom-right corner with a penguin in a snowy ice cave.
+**Tap the penguin** to start or stop talking. It dozes when off, listens with a
+warm glow, blinks its hard-hat light while thinking and moves its beak when it
+talks. The 💬 icon shows the conversation as text; the ⚙ icon opens Settings,
+where you can also use **your own picture** instead of the penguin.
+
+It does what you ask straight away ("make the title bigger", "create a login
+wireframe", "put it in Figma") and tells you in a few words; say **"undo"** to
+put it back. Prefer to be asked first? Settings → **Ask me before changing my
+Figma design**.
+
+## Search and open websites
+
+- **"Search for the latest web design trends"**: it searches the internet and
+  tells you the answer.
+- **"Open 10 SEO company websites"**: it finds them and opens them as tabs in
+  your Chrome.
+
 ## Talking to it
 
 1. Tap the big **orange circle** once. Chrome asks to use your microphone: click **Allow**.

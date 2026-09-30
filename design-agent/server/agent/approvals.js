@@ -142,3 +142,16 @@ export const DESIGN_TOOL = {
     required: ["name", "nodes"],
   },
 };
+
+/**
+ * "Make the title bigger", "create a login wireframe", "put the screenshot in Figma":
+ * the user asked for the change themselves, so it can be done straight away.
+ * Questions ("is this spacing ok?", "what would you change?") are not requests.
+ */
+export function isDirectRequest(text) {
+  const t = String(text || "").toLowerCase().trim();
+  if (!t) return false;
+  if (/^(what|why|how|is|are|does|do|should|which|when|who|would|isn't|aren't)\b/.test(t)) return false;
+  if (/\b(what do you think|any (ideas|suggestions)|suggest|recommend|review|feedback)\b/.test(t)) return false;
+  return /\b(create|make|design|draw|sketch|build|generate|change|set|increase|decrease|reduce|bigger|smaller|move|put|place|add|rename|resize|duplicate|group|apply|fix|align|update|replace|turn|tighten|widen|darken|lighten|round|swap|remove the gap|use)\b/.test(t);
+}
