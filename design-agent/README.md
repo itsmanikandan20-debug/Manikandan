@@ -31,6 +31,18 @@ Figma design**.
 
 ## Talking to it
 
+**Phone-call voice (on by default).** When you tap the penguin, Design Agent starts a
+live voice call with Google's AI (Gemini Live, free with the same key). You hear a
+clear, human-sounding voice, it answers in about a second, and you can talk over it
+any time: it stops and listens, like a real call. Pick the voice you like in
+**Settings → Call voice**. If the call voice isn't available (for example the free
+limit is used up), it switches to the standard voice by itself.
+
+Use **headphones** or keep the speaker volume moderate: the helper cancels its own
+echo, but headphones are always clearest.
+
+The standard voice (used as a backup, or if you untick **Phone-call voice** in Settings):
+
 1. Tap the **penguin** once. The first time, it asks to use your microphone: click **Allow**.
 2. Just talk. When you pause, it answers out loud, like a phone call. If the answer
    takes more than a moment, it says a quick "Mm-hm" or "Okay" so you know it heard you.

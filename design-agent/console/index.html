@@ -146,6 +146,20 @@
       </div>
       <p id="avatar-msg" class="form-msg" role="status"></p>
 
+      <label class="check"><input type="checkbox" id="set-live"> Phone-call voice: clear, human-sounding, and you can interrupt any time (Gemini Live, free)</label>
+      <label for="set-live-voice">Call voice</label>
+      <select id="set-live-voice">
+        <option value="Aoede">Aoede (warm, female)</option>
+        <option value="Kore">Kore (firm, female)</option>
+        <option value="Leda">Leda (young, female)</option>
+        <option value="Zephyr">Zephyr (bright, female)</option>
+        <option value="Puck">Puck (upbeat, male)</option>
+        <option value="Charon">Charon (calm, male)</option>
+        <option value="Fenrir">Fenrir (lively, male)</option>
+        <option value="Orus">Orus (firm, male)</option>
+      </select>
+      <p class="small">If the call voice isn't available, the standard voice below is used instead.</p>
+
       <label for="set-lang">Your accent (helps it understand you)</label>
       <select id="set-lang">
         <option value="en-IN">English (India)</option>
@@ -153,7 +167,7 @@
         <option value="en-GB">English (UK)</option>
         <option value="en-AU">English (Australia)</option>
       </select>
-      <label for="set-voice">Its voice</label>
+      <label for="set-voice">Standard voice (backup)</label>
       <div class="row">
         <select id="set-voice"></select>
         <button type="button" id="test-voice" class="ghost">Test</button>
@@ -176,6 +190,7 @@
     </section>
   </main>
   <script src="/voice.js"></script>
+  <script src="/live.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

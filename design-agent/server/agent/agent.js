@@ -180,12 +180,18 @@ export function createAgent({ broadcast, parts, captures }) {
     return list;
   }
 
-  async function* streamTurn(contents, waitedOnce = false, firstWordsWithinMs = 8000, { quick = false, stop = null } = {}) {
+  /** The tools the AI can use right now (some need Chrome or Figma to be connected). */
+  function toolsNow({ all = false } = {}) {
     const tools = [];
-    if (parts.connected("browser")) tools.push(WEB_TOOL, SCREENSHOT_TOOL);
+    if (all || parts.connected("browser")) tools.push(WEB_TOOL, SCREENSHOT_TOOL);
     tools.push(SEARCH_TOOL, OPEN_SITES_TOOL, LIST_SCREENSHOTS_TOOL);
-    if (parts.connected("figma")) tools.push(FIGMA_TOOL, FIND_TOOL, GOTO_TOOL, DESIGN_TOOL);
+    if (all || parts.connected("figma")) tools.push(FIGMA_TOOL, FIND_TOOL, GOTO_TOOL, DESIGN_TOOL);
     tools.push(CHANGE_TOOL, OPEN_FILE_TOOL); // changes can also be for a file that isn't open yet
+    return tools;
+  }
+
+  async function* streamTurn(contents, waitedOnce = false, firstWordsWithinMs = 8000, { quick = false, stop = null } = {}) {
+    const tools = toolsNow();
     let lastError;
     const all = await candidates();
     if (!all.length) throw new AiError("No AI is set up. Add your free Gemini key in Settings.");
@@ -799,6 +805,38 @@ export function createAgent({ broadcast, parts, captures }) {
 
   return {
     handleUserText,
+    // ---- used by the live phone-call voice (live-call.js) ----
+    /** All tools (a call lasts a while, so Chrome/Figma may connect later; unavailable ones say so). */
+    liveTools: () => toolsNow({ all: true }),
+    async runToolForLive(call) {
+      if (["look_at_webpage", "take_screenshot"].includes(call.name) && !parts.connected("browser")) {
+        return { error: "The Chrome add-on isn't connected. Ask the user to open Chrome (with the Design Agent add-on on)." };
+      }
+      if (["look_at_figma", "find_in_figma", "go_to_figma_layer", "propose_design"].includes(call.name) && !parts.connected("figma")) {
+        if (parts.ensureFigma) await parts.ensureFigma();
+        if (!parts.connected("figma")) return { error: "The Figma plugin isn't running. Ask the user to open their Figma file." };
+      }
+      const { response } = await runTool(call);
+      return response;
+    },
+    /** What the user just said on the call (a direct request is its own approval). */
+    setRequest(text) {
+      currentRequest = String(text || "");
+    },
+    /** Keeps the call in the same conversation history as typed chat. */
+    remember(userText, reply) {
+      if (!userText && !reply) return;
+      history.push({ role: "user", parts: [{ text: userText || "(no words)" }] }, { role: "model", parts: [{ text: reply || "" }] });
+      history = history.slice(-MAX_HISTORY);
+    },
+    /** The last part of the conversation as plain text (to continue it on a call). */
+    recentConversation(maxTurns = 12) {
+      return history
+        .slice(-maxTurns)
+        .map((m) => `${m.role === "model" ? "You" : "User"}: ${m.parts.map((p) => p.text || "").join("")}`)
+        .join("\n");
+    },
+    hasPending: () => Boolean(pending),
     approve: (id) => approve(id),
     figmaFileOpened: (name) => figmaFileOpened(name),
     reject: (id) => reject(id),

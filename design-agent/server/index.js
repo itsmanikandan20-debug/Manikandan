@@ -15,6 +15,7 @@ import { BACKUPS, backupById, pickBackupModel } from "./ai/backups.js";
 import { openWindow } from "./open-window.js";
 import { createCaptures } from "./captures.js";
 import { createFigmaAutostart } from "./figma-autostart.js";
+import { createLiveCalls } from "./agent/live-call.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ENV_FILE = path.join(ROOT, ".env");
@@ -150,6 +151,7 @@ parts.ensureFigma = () => autostart.ensure();
 
 const captures = createCaptures(ROOT);
 const agent = createAgent({ broadcast, parts, captures });
+const liveCallFor = createLiveCalls({ agent, pointAt });
 
 // ---------- web server ----------
 const TYPES = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png" };
@@ -306,8 +308,14 @@ wss.on("error", () => {}); // listen errors are handled on the server below
 
 wss.on("connection", (socket) => {
   let role = null;
+  let live = null; // this helper window's phone-call voice
 
-  socket.on("message", (raw) => {
+  socket.on("message", (raw, isBinary) => {
+    // Audio from the helper window's microphone, for the live call.
+    if (isBinary) {
+      if (role === "console" && live) live.audio(raw);
+      return;
+    }
     let message;
     try {
       message = JSON.parse(raw);
@@ -352,7 +360,12 @@ wss.on("connection", (socket) => {
     }
 
     if (role === "console") {
-      if (message.type === "chat") agent.handleUserText(message.text);
+      if (message.type === "chat" && !(live && live.isOn() && live.text(String(message.text || "")))) agent.handleUserText(message.text);
+      if (message.type === "live_start") {
+        live = live || liveCallFor(socket);
+        live.start({ voice: String(message.voice || "") });
+      }
+      if (message.type === "live_stop" && live) live.stop();
       if (message.type === "reset") agent.reset();
       // Only a click in the helper window (or your clear "yes") can approve a change.
       if (message.type === "approve") agent.approve(String(message.id || ""));
@@ -373,6 +386,7 @@ wss.on("connection", (socket) => {
   });
 
   socket.on("close", () => {
+    if (live) live.stop();
     if (!role) return;
     clients[role].delete(socket);
     if (role === "figma" && !clients.figma.size) figmaFile = { name: "", key: "", page: "" };

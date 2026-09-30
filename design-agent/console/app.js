@@ -36,19 +36,59 @@
       lastSaid = said;
       submit(said, true);
     },
-    onState: (state) => {
-      if (state === "listening" || state === "off") clearPointerSoon(4000);
-      orb.dataset.state = state;
-      orb.setAttribute("aria-label", state === "off" ? "Start talking" : "Stop talking");
-      $("voice-state").textContent = STATE_LABEL[state] || "";
-      if (state !== "off") showProblem("");
-    },
-    onCaption: (caption, who) => {
-      $("caption").textContent = caption;
-      $("caption").dataset.who = who;
-    },
+    onState: showVoiceState,
+    onCaption: showCaption,
     onProblem: showProblem,
     onPoint: pointAt,
+  });
+
+  function showVoiceState(state) {
+    if (state === "listening" || state === "off") clearPointerSoon(4000);
+    orb.dataset.state = state;
+    orb.setAttribute("aria-label", state === "off" ? "Start talking" : "Stop talking");
+    $("voice-state").textContent = STATE_LABEL[state] || "";
+    if (state !== "off") showProblem("");
+  }
+  function showCaption(caption, who) {
+    $("caption").textContent = caption;
+    $("caption").dataset.who = who;
+  }
+
+  // ---------- phone-call voice (Gemini Live): the most natural voice ----------
+  const LIVE_SETTINGS_KEY = "design-agent-live";
+  const liveSettings = (() => {
+    try {
+      return Object.assign({ on: true, voice: "Aoede" }, JSON.parse(localStorage.getItem(LIVE_SETTINGS_KEY) || "{}"));
+    } catch {
+      return { on: true, voice: "Aoede" };
+    }
+  })();
+  function saveLiveSettings(changes) {
+    Object.assign(liveSettings, changes);
+    try {
+      localStorage.setItem(LIVE_SETTINGS_KEY, JSON.stringify(liveSettings));
+    } catch {
+      // not remembered
+    }
+  }
+  let liveUnavailableUntil = 0; // after the call voice failed, use the standard voice for a while
+  const live = window.createLiveVoice({
+    send: (message) => socket && socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify(message)),
+    sendAudio: (buffer) => socket && socket.readyState === WebSocket.OPEN && socket.send(buffer),
+    onState: showVoiceState,
+    onCaption: showCaption,
+    onProblem: showProblem,
+    onFallback: (reason) => {
+      // The call voice isn't available right now: carry on with the standard voice.
+      liveUnavailableUntil = Date.now() + 10 * 60 * 1000;
+      console.log("Call voice unavailable:", reason);
+      if (voice.supported) {
+        voice.start();
+        showCaption("Using the standard voice for now (the call voice isn't available: " + (reason || "unknown") + ").", "agent");
+      } else {
+        showProblem("The call voice isn't available right now (" + (reason || "unknown") + "). You can still type below.");
+      }
+    },
   });
 
   // ---------- the orange pointer on the web page ----------
@@ -74,11 +114,28 @@
   }
 
   orb.addEventListener("click", () => {
-    if (voice.isOn()) voice.stop();
+    if (live.isOn()) live.stop();
+    else if (voice.isOn()) voice.stop();
+    else if (liveSettings.on && live.supported && Date.now() > liveUnavailableUntil) live.start(liveSettings.voice);
     else voice.start();
   });
 
-  if (!voice.supported) {
+  $("set-live").checked = liveSettings.on;
+  $("set-live-voice").value = liveSettings.voice;
+  $("set-live").addEventListener("change", (e) => {
+    saveLiveSettings({ on: e.target.checked });
+    liveUnavailableUntil = 0;
+    if (live.isOn()) live.stop();
+  });
+  $("set-live-voice").addEventListener("change", (e) => {
+    saveLiveSettings({ voice: e.target.value });
+    if (live.isOn()) {
+      live.stop(); // the new voice is used from the next call
+      showCaption("Tap me to call again with the new voice.", "agent");
+    }
+  });
+
+  if (!voice.supported && !live.supported) {
     showProblem("Voice needs Google Chrome or Microsoft Edge. You can still type below.");
     orb.disabled = true;
   }
@@ -354,9 +411,15 @@
   // ---------- connection to the local server ----------
   function connect() {
     socket = new WebSocket("ws://" + location.host + "/ws");
+    socket.binaryType = "arraybuffer";
     socket.addEventListener("open", () => socket.send(JSON.stringify({ type: "hello", role: "console" })));
-    socket.addEventListener("message", (event) => handle(JSON.parse(event.data)));
+    socket.addEventListener("message", (event) => {
+      if (typeof event.data !== "string") return live.playAudio(event.data); // the call's voice
+      const message = JSON.parse(event.data);
+      if (!live.handle(message)) handle(message);
+    });
     socket.addEventListener("close", () => {
+      if (live.isOn()) live.stop();
       $("st-ai").classList.remove("on");
       $("st-ai").textContent = "Not running";
       $("st-ai").title = "Start Design Agent again (double-click Start Design Agent)";
@@ -450,7 +513,7 @@
         break;
       case "error":
         addBubble("error", message.message);
-        if (voice.isOn()) voice.say(message.message);
+        if (voice.isOn() && !live.isOn()) voice.say(message.message);
         else showProblem(message.message);
         break;
     }
