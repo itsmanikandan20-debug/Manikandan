@@ -31,10 +31,17 @@ Figma design**.
 
 ## Talking to it
 
-1. Tap the big **orange circle** once. Chrome asks to use your microphone: click **Allow**.
-2. Just talk. When you pause, it answers out loud.
-3. Talk while it's speaking to interrupt it.
-4. Tap the circle again to stop listening.
+1. Tap the **penguin** once. The first time, it asks to use your microphone: click **Allow**.
+2. Just talk. When you pause, it answers out loud, like a phone call. If the answer
+   takes more than a moment, it says a quick "Mm-hm" or "Okay" so you know it heard you.
+3. **Interrupt any time**: just start talking while it speaks and it stops and
+   listens. If you pause mid-sentence and carry on before it answers, it joins
+   both parts together instead of answering half your sentence.
+4. Tap the penguin again to stop listening.
+
+**Fastest answers:** add the free **Groq** key (Settings → Backup AIs). For normal
+talk Design Agent asks Groq first because it replies in a fraction of a second;
+Gemini is still used for looking at pages, Figma and designs.
 
 Tips: **headphones** work best, so it doesn't hear its own voice. In **Settings**
 you can pick your accent, its voice and its speed. **Show text** shows the

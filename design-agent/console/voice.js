@@ -2,7 +2,8 @@
 // - Listening: Web Speech API (SpeechRecognition). Chrome sends the audio to Google to turn it into text.
 // - Speaking:  speechSynthesis, using a voice installed on this computer.
 // Answers are spoken sentence by sentence while they arrive, so it starts talking quickly.
-// If you start talking while it speaks, it stops and listens ("barge-in").
+// If you start talking while it speaks (or while it's still thinking), it stops and listens ("barge-in").
+// So it never feels silent, a short "Mm-hm" plays if the answer takes more than a moment.
 (function () {
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const SETTINGS_KEY = "design-agent-voice";
@@ -55,6 +56,14 @@
     let echoUntil = 0;        // ignore our own voice for a moment after speaking
     const utterances = [];    // keep references so Chrome doesn't drop them mid-sentence
 
+    let waiting = false;      // you said something and its answer hasn't started yet
+    let heardAnswer = false;  // part of the current answer has been spoken
+    let startedAnswer = false; // the first words of this answer were already sent to the voice
+    let fillerTimer = null;
+    let cutOffUnheard = false; // you kept talking before it answered: join your words together
+    const FILLERS = ["Mm-hm.", "Okay.", "Sure.", "Right.", "Got it."];
+    const FILLER_AFTER_MS = 700;
+
     function setState(state) {
       onState(state);
     }
@@ -99,8 +108,23 @@
     function flush() {
       const text = finalText.trim();
       finalText = "";
-      if (text) onUserSaid(text);
-      else if (active && !speaking) setState("listening");
+      if (!text) {
+        if (active && !speaking) setState("listening");
+        return;
+      }
+      // If the last thing you said hasn't been answered out loud yet, this continues it.
+      const continues = (waiting && !heardAnswer) || cutOffUnheard;
+      cutOffUnheard = false;
+      waiting = true;
+      heardAnswer = false;
+      startedAnswer = false;
+      setState("thinking");
+      // A tiny "Mm-hm" if the answer takes more than a moment, so it feels like a call.
+      clearTimeout(fillerTimer);
+      fillerTimer = setTimeout(() => {
+        if (waiting && !startedAnswer && !speaking) queueSentence(FILLERS[Math.floor(Math.random() * FILLERS.length)], true);
+      }, FILLER_AFTER_MS);
+      onUserSaid(text, { continues });
     }
 
     function startRecognition() {
@@ -129,12 +153,16 @@
           const isFinal = Boolean(finalText.trim()) && !interim;
           if (words(heard).length < 2 && !isFinal) return; // wait until a short word is certain
           stopSpeaking(); // you started talking: stop and listen
+        } else if (waiting && (words(heard).length >= 2 || (finalText.trim() && !interim))) {
+          // You're still talking while it thinks: don't talk over you. Your new words
+          // will be sent together with what you said before.
+          stopSpeaking();
         }
 
         setState("hearing");
         onCaption(heard, "you");
         clearTimeout(sendTimer);
-        if (finalText.trim() && !interim) sendTimer = setTimeout(flush, 450);
+        if (finalText.trim() && !interim) sendTimer = setTimeout(flush, 250);
       };
 
       recognition.onerror = (event) => {
@@ -172,8 +200,12 @@
     }
 
     // ---------- speaking ----------
-    function queueSentence(text) {
-      if (muted) return;
+    function queueSentence(text, filler = false) {
+      if (muted && !filler) return; // (the little "Mm-hm" still plays right after you interrupt)
+      if (!filler) {
+        startedAnswer = true;
+        clearTimeout(fillerTimer);
+      }
       const targets = carryTargets.concat(window.markerTargets(text));
       carryTargets = [];
       const clean = speakable(text);
@@ -196,6 +228,10 @@
       utterance.rate = Number(settings.rate) || 1;
       utterance.onstart = () => {
         targets.forEach(onPoint); // move the pointer as this sentence starts
+        if (!filler) {
+          heardAnswer = true;
+          waiting = false;
+        }
         speaking = true;
         setState("speaking");
         onCaption(clean, "agent");
@@ -206,7 +242,7 @@
         if (pending === 0) {
           speaking = false;
           echoUntil = Date.now() + 1200;
-          if (active) setState("listening");
+          if (active) setState(waiting ? "thinking" : "listening");
           else setState("off");
         }
       };
@@ -218,6 +254,8 @@
     }
 
     function stopSpeaking() {
+      clearTimeout(fillerTimer);
+      if (waiting && !heardAnswer) cutOffUnheard = true;
       muted = true;
       buffer = "";
       pending = 0;
@@ -256,6 +294,7 @@
 
     function stop() {
       active = false;
+      waiting = false;
       clearTimeout(sendTimer);
       finalText = "";
       if (recognition) {
@@ -286,6 +325,7 @@
       beginAnswer() {
         muted = false;
         buffer = "";
+        startedAnswer = false;
         carryTargets = [];
         spokenWords = new Set();
         if (active) setState("thinking");
@@ -301,10 +341,32 @@
           queueSentence(buffer.slice(0, end));
           buffer = buffer.slice(end);
         }
+        // Start talking as early as possible: the first few words don't wait for the full sentence.
+        if (!startedAnswer && buffer.trim()) {
+          const comma = buffer.search(/[,;:—](?=\s)/);
+          if (comma > 0 && words(buffer.slice(0, comma)).length >= 3) {
+            queueSentence(buffer.slice(0, comma + 1));
+            buffer = buffer.slice(comma + 1);
+          } else if (words(window.stripMarkers(buffer)).length >= 8 && !/\[\[[^\]]*$/.test(buffer)) {
+            const cut = buffer.lastIndexOf(" ");
+            if (cut > 0) {
+              queueSentence(buffer.slice(0, cut));
+              buffer = buffer.slice(cut);
+            }
+          }
+        }
       },
 
       /** Call when the answer is complete, to speak what's left. */
       finishAnswer() {
+        if (muted) {
+          // An answer you talked over: nothing to say, and your new words are on their way.
+          buffer = "";
+          carryTargets = [];
+          return;
+        }
+        clearTimeout(fillerTimer);
+        waiting = false;
         if (buffer.trim()) queueSentence(buffer);
         buffer = "";
         if (carryTargets.length) carryTargets.forEach(onPoint);
@@ -315,7 +377,8 @@
       /** Speak a short message now (used for errors). */
       say(text) {
         muted = false;
-        queueSentence(text);
+        clearTimeout(fillerTimer);
+        queueSentence(text, true);
       },
 
       saveSettings(changes) {

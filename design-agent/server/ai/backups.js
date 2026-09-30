@@ -12,6 +12,7 @@ export const BACKUPS = [
     envKey: "GROQ_API_KEY",
     baseUrl: "https://api.groq.com/openai/v1",
     keysUrl: "https://console.groq.com/keys",
+    fast: true, // answers in a fraction of a second: goes first for plain talk
     prefer: [/llama-4-maverick/i, /llama-4-scout/i, /vision|-vl\b|\bvl-/i, /gpt-oss-120b/i, /llama-3\.3-70b/i, /qwen/i, /gpt-oss/i, /llama/i],
     skip: /whisper|guard|tts|playai|distil|embed|compound|orpheus/i,
   },
@@ -21,6 +22,7 @@ export const BACKUPS = [
     envKey: "CEREBRAS_API_KEY",
     baseUrl: "https://api.cerebras.ai/v1",
     keysUrl: "https://cloud.cerebras.ai",
+    fast: true,
     prefer: [/gpt-oss-120b/i, /qwen-3-235b/i, /llama-4/i, /qwen/i, /llama-3\.3-70b|llama3\.3-70b/i, /llama/i],
     skip: /embed|guard/i,
   },

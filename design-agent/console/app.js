@@ -17,6 +17,7 @@
   let clearPointerTimer = null;
   let busy = false;
   let waitingToSend = null; // something you said while it was still answering
+  let lastSaid = ""; // your last spoken request (joined with the next part if you kept talking)
 
   const STATE_LABEL = {
     off: "Tap me to talk",
@@ -28,9 +29,12 @@
 
   // ---------- voice ----------
   const voice = window.createVoice({
-    onUserSaid: (said) => {
-      if (busy) waitingToSend = said;
-      else submit(said);
+    onUserSaid: (said, { continues } = {}) => {
+      // Talking over it (even while it's still thinking) stops the old answer; the helper
+      // answers your new words. If it hadn't said anything yet, both parts go together.
+      if (continues && lastSaid) said = `${lastSaid} ${said}`;
+      lastSaid = said;
+      submit(said, true);
     },
     onState: (state) => {
       if (state === "listening" || state === "off") clearPointerSoon(4000);
@@ -453,9 +457,9 @@
   }
 
   // ---------- sending ----------
-  function submit(value) {
+  function submit(value, interrupt = false) {
     const content = value.trim();
-    if (!content || busy) return;
+    if (!content || (busy && !interrupt)) return;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       showProblem("Design Agent isn't running. Double-click \"Start Design Agent\" to start it.");
       return;

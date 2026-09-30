@@ -17,6 +17,9 @@ const RETRY_DELAY_MS = 1500;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Thrown when you talk over an answer: the answer just stops (no error message). */
+class Stopped extends Error {}
+
 // Questions that are probably about what's on screen. When one of these words
 // appears, we look at the page right away instead of waiting for the AI to ask,
 // which saves a round trip and makes the answer faster.
@@ -119,6 +122,7 @@ export function createAgent({ broadcast, parts, captures }) {
   let history = [];
   let models = null; // best first; the one that last worked is moved to the front
   let busy = false;
+  let turnStop = null; // AbortController of the answer being given now (so you can interrupt it)
 
   async function ensureModels() {
     if (process.env.GEMINI_MODEL) return (models = [process.env.GEMINI_MODEL]);
@@ -176,7 +180,7 @@ export function createAgent({ broadcast, parts, captures }) {
     return list;
   }
 
-  async function* streamTurn(contents, waitedOnce = false, firstWordsWithinMs = 8000) {
+  async function* streamTurn(contents, waitedOnce = false, firstWordsWithinMs = 8000, { quick = false, stop = null } = {}) {
     const tools = [];
     if (parts.connected("browser")) tools.push(WEB_TOOL, SCREENSHOT_TOOL);
     tools.push(SEARCH_TOOL, OPEN_SITES_TOOL, LIST_SCREENSHOTS_TOOL);
@@ -189,10 +193,14 @@ export function createAgent({ broadcast, parts, captures }) {
     if (Date.now() < geminiSlowUntil && available.some((c) => c.backup)) {
       // Gemini was busy or slow a moment ago: backups first.
       available = available.filter((c) => c.backup).concat(available.filter((c) => !c.backup));
+    } else if (quick) {
+      // Plain talk: the very fast AIs (Groq, Cerebras) answer in well under a second, so they go first.
+      available = available.filter((c) => c.backup && c.backup.fast).concat(available.filter((c) => !(c.backup && c.backup.fast)));
     }
     const minuteWaits = [];
     let skipGemini = false;
     for (const candidate of available.length ? available : all) {
+      if (stop && stop.aborted) throw new Stopped();
       const { provider, model, backup } = candidate;
       if (skipGemini && provider === "gemini") continue;
       const label = backup ? `Backup AI (${backup.name} ${model})` : `Gemini ${model}`;
@@ -201,6 +209,8 @@ export function createAgent({ broadcast, parts, captures }) {
         // If the first words don't arrive in time, give up on this one and try the next.
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), firstWordsWithinMs);
+        const onStop = () => controller.abort();
+        if (stop) stop.addEventListener("abort", onStop);
         try {
           const stream = backup
             ? streamBackup({ backup, key: process.env[backup.envKey], model, vision: candidate.vision, system: SYSTEM_PROMPT, contents, tools, signal: controller.signal })
@@ -215,10 +225,13 @@ export function createAgent({ broadcast, parts, captures }) {
             yield event;
           }
           clearTimeout(timer);
+          if (stop) stop.removeEventListener("abort", onStop);
           if (provider === "gemini" && models[0] !== model) models = [model, ...models.filter((m) => m !== model)];
           return;
         } catch (caught) {
           clearTimeout(timer);
+          if (stop) stop.removeEventListener("abort", onStop);
+          if (stop && stop.aborted) throw new Stopped(); // you interrupted: just stop
           let error = caught;
           if (!started && (caught.name === "AbortError" || controller.signal.aborted)) {
             error = new AiError(`${label} was too slow.`, { status: 504, retryable: true });
@@ -269,7 +282,7 @@ export function createAgent({ broadcast, parts, captures }) {
       broadcast({ type: "notice", message: `Free limit reached: waiting ${seconds} seconds, then I'll answer…`, quiet: true });
       console.log(`  Waiting ${seconds} s for the free per-minute limit...`);
       await wait(seconds * 1000);
-      yield* streamTurn(contents, true, firstWordsWithinMs);
+      yield* streamTurn(contents, true, firstWordsWithinMs, { quick, stop });
       return;
     }
     if (lastError && lastError.status === 429 && lastError.limit === "day") {
@@ -677,6 +690,11 @@ export function createAgent({ broadcast, parts, captures }) {
     if (pending && answer === "no") return reject(pending.id, text);
     if (answer === "undo" && lastApplied && !pending) return undoLast(text);
 
+    if (busy && turnStop) {
+      // You talked over the answer: stop it and answer the new words instead.
+      turnStop.abort();
+      if (!(await waitUntilFree())) return;
+    }
     if (busy) {
       broadcast({ type: "error", message: "One moment, I'm still answering." });
       return;
@@ -698,6 +716,7 @@ export function createAgent({ broadcast, parts, captures }) {
    */
   async function runTurn({ userText, promptText, extraParts = [], historyText, observe }) {
     busy = true;
+    const stopper = (turnStop = new AbortController());
     currentRequest = userText || "";
     if (userText) broadcast({ type: "message", role: "user", text: userText });
     broadcast({ type: "agent_start" });
@@ -717,13 +736,16 @@ export function createAgent({ broadcast, parts, captures }) {
       }
       const contents = [...history, { role: "user", parts: userParts }];
       // Designs are big plans that arrive all at once, so give them longer before switching.
-      const patience = DESIGN_REQUEST.test(promptText) || /\b(create|design|wireframe)\b/i.test(promptText) ? 25000 : 5000;
+      const designing = DESIGN_REQUEST.test(promptText) || /\b(create|design|wireframe)\b/i.test(promptText);
+      const patience = designing ? 25000 : 5000;
+      // Plain talk (not about the screen, not a design): the fastest AI answers.
+      const quick = !designing && !surface && !extraParts.length;
 
       // UNDERSTAND / DISCUSS / SUGGEST: stream the answer; run any tools it asks for.
       for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
         const modelParts = [];
         const calls = [];
-        for await (const event of streamTurn(contents, false, patience)) {
+        for await (const event of streamTurn(contents, false, quick && round === 0 ? 3000 : patience, { quick, stop: stopper.signal })) {
           modelParts.push(event.part);
           if (event.call) calls.push(event.call);
           if (event.text) {
@@ -732,7 +754,7 @@ export function createAgent({ broadcast, parts, captures }) {
             broadcast({ type: "agent_delta", text: event.text });
           }
         }
-        if (!calls.length || round === MAX_TOOL_ROUNDS) break;
+        if (!calls.length || round === MAX_TOOL_ROUNDS || stopper.signal.aborted) break;
 
         contents.push({ role: "model", parts: modelParts });
         const responses = [];
@@ -749,6 +771,7 @@ export function createAgent({ broadcast, parts, captures }) {
         }
       }
 
+      if (stopper.signal.aborted) throw new Stopped();
       if (!reply.trim()) {
         reply = pending ? "Want me to apply that?" : "Sorry, I didn't get an answer back. Could you say that again?";
         broadcast({ type: "agent_delta", text: reply });
@@ -757,12 +780,19 @@ export function createAgent({ broadcast, parts, captures }) {
       const proposalNote = pending ? ` [proposed, waiting for approval: ${pending.summary}]` : "";
       history.push({ role: "user", parts: [{ text: historyText }] }, { role: "model", parts: [{ text: reply + proposalNote }] });
     } catch (error) {
+      if (error instanceof Stopped || stopper.signal.aborted) {
+        // Interrupted: keep what was already said, so the conversation still makes sense.
+        if (reply.trim()) history.push({ role: "user", parts: [{ text: historyText }] }, { role: "model", parts: [{ text: reply + " …(interrupted)" }] });
+        console.log("  Stopped: you started talking.");
+        return;
+      }
       const message = error instanceof AiError ? error.message : "Something went wrong while answering. Try again.";
       if (!(error instanceof AiError)) console.error(error);
       broadcast({ type: "error", message });
     } finally {
       history = history.slice(-MAX_HISTORY);
-      broadcast({ type: "agent_done", text: reply });
+      broadcast({ type: "agent_done", text: reply, stopped: stopper.signal.aborted });
+      if (turnStop === stopper) turnStop = null;
       busy = false;
     }
   }
