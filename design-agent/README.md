@@ -73,6 +73,23 @@ never blocks your clicks, and disappears a few seconds after it finishes.
 
 This needs the **Chrome add-on**, installed once (below).
 
+## Reviews: it marks the problems on your screen
+
+Say **"Review this page"**, **"Any UX corrections?"**, **"Check the content"** or
+**"What's wrong with this design?"**. It looks, then draws **numbered, coloured
+boxes** right on the website or Figma design, each with a short label:
+
+- **Purple = UX**: usability, flow, clarity, accessibility
+- **Blue = UI**: spacing, alignment, fonts, colours, contrast
+- **Green = Content**: wording, spelling, labels, tone
+
+Then it talks you through them in order ("Number 1, a UX issue: …"), with its
+pointer on each. Say **"fix number 2"** or **"fix all of them"** and it changes your
+Figma design straight away. Websites can't be edited, so for a website it tells
+you the exact fix (new text, colour or size). Say **"clear the marks"** to remove
+them. In Figma the marks are one locked group, "Design Agent review notes", that
+you can also delete yourself.
+
 ## Designing new screens and wireframes
 
 Say what you want, for example **"Create a wireframe for a mobile login screen"**,

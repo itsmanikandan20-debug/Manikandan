@@ -12,6 +12,7 @@ figma.showUI(__html__, { visible: false });
 const ORANGE = { r: 0.949, g: 0.337, b: 0.114 };
 const WHITE = { r: 1, g: 1, b: 1 };
 const POINTER_TAG = "pointer";
+const MARKS_TAG = "review-marks";
 const MAX_NODES = 220;
 const MAX_DEPTH = 8;
 
@@ -29,9 +30,18 @@ function contrast(a, b) {
   const l2 = luminance(b);
   return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
 }
+/** Design Agent's own temporary layers (the pointer and review marks): never part of your design. */
 function isPointer(node) {
   try {
-    return node.getPluginData("designAgent") === POINTER_TAG;
+    const tag = node.getPluginData("designAgent");
+    return tag === POINTER_TAG || tag === MARKS_TAG;
+  } catch (e) {
+    return false;
+  }
+}
+function hasTag(node, tag) {
+  try {
+    return node.getPluginData("designAgent") === tag;
   } catch (e) {
     return false;
   }
@@ -273,7 +283,7 @@ function removePointer() {
   }
   pointerNode = null;
   // Also clean up any pointer left behind by an earlier session.
-  for (const n of figma.currentPage.children) if (isPointer(n)) n.remove();
+  for (const n of figma.currentPage.children) if (hasTag(n, POINTER_TAG)) n.remove();
 }
 
 let labelFont = null;
@@ -374,6 +384,81 @@ async function point(target) {
   const view = figma.viewport.bounds;
   if (!intersects(area, view)) figma.viewport.center = { x: area.x + area.width / 2, y: area.y + area.height / 2 };
   return { ok: true };
+}
+
+// ---------- review marks: numbered, coloured boxes with a label (UX / UI / Content) ----------
+const MARK_KINDS = {
+  ux: { color: { r: 0.486, g: 0.302, b: 1 }, label: "UX" },
+  ui: { color: { r: 0.118, g: 0.533, b: 0.898 }, label: "UI" },
+  content: { color: { r: 0.18, g: 0.62, b: 0.357 }, label: "CONTENT" },
+};
+
+function clearMarks() {
+  for (const n of figma.currentPage.children) if (hasTag(n, MARKS_TAG)) n.remove();
+  return { ok: true };
+}
+
+/** marks: [{ id: "12:34", kind: "ux" | "ui" | "content", note }] Drawn as one locked group you can delete. */
+async function mark(marks) {
+  clearMarks();
+  const font = await ensureLabelFont();
+  const k = 1 / figma.viewport.zoom; // same size on screen at any zoom
+  const nodes = [];
+  const missing = [];
+  let area = null;
+  let number = 0;
+  for (const m of marks || []) {
+    number++;
+    const node = await figma.getNodeByIdAsync(String(m.id || "").split("-")[0]);
+    if (!node || !node.absoluteBoundingBox) {
+      missing.push(m.id);
+      continue;
+    }
+    const A = node.absoluteBoundingBox;
+    const kind = MARK_KINDS[String(m.kind || "").toLowerCase()] || MARK_KINDS.ux;
+    const pad = 4 * k;
+    const box = figma.createRectangle();
+    box.name = `${number}. ${kind.label}`;
+    box.x = A.x - pad;
+    box.y = A.y - pad;
+    box.resize(Math.max(A.width + pad * 2, 1), Math.max(A.height + pad * 2, 1));
+    box.fills = [{ type: "SOLID", color: kind.color, opacity: 0.06 }];
+    box.strokes = [{ type: "SOLID", color: kind.color }];
+    box.strokeWeight = 2 * k;
+    box.cornerRadius = 6 * k;
+    nodes.push(box);
+    if (font) {
+      const tag = figma.createFrame();
+      tag.name = "label";
+      tag.layoutMode = "HORIZONTAL";
+      tag.primaryAxisSizingMode = "AUTO";
+      tag.counterAxisSizingMode = "AUTO";
+      tag.paddingLeft = tag.paddingRight = 8 * k;
+      tag.paddingTop = tag.paddingBottom = 4 * k;
+      tag.cornerRadius = 8 * k;
+      tag.fills = [{ type: "SOLID", color: kind.color }];
+      const text = figma.createText();
+      text.fontName = font;
+      text.fontSize = 12 * k;
+      text.characters = `${number}  ${kind.label} · ${String(m.note || "").slice(0, 80)}`;
+      text.fills = [{ type: "SOLID", color: WHITE }];
+      tag.appendChild(text);
+      tag.x = A.x - pad;
+      tag.y = A.y - pad - tag.height - 4 * k;
+      nodes.push(tag);
+    }
+    area = area
+      ? { x: Math.min(area.x, A.x), y: Math.min(area.y, A.y), r: Math.max(area.r, A.x + A.width), b: Math.max(area.b, A.y + A.height) }
+      : { x: A.x, y: A.y, r: A.x + A.width, b: A.y + A.height };
+  }
+  if (!nodes.length) return { ok: false, marked: 0, missing };
+  const group = figma.group(nodes, figma.currentPage);
+  group.name = "Design Agent review notes (delete any time)";
+  group.setPluginData("designAgent", MARKS_TAG);
+  group.locked = true;
+  const rect = { x: area.x, y: area.y, width: area.r - area.x, height: area.b - area.y };
+  if (!intersects(rect, figma.viewport.bounds)) figma.viewport.center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  return { ok: true, marked: number - missing.length, missing };
 }
 
 // ---------- changing the design (only approved changes arrive here) ----------
@@ -1136,6 +1221,8 @@ async function runTool(tool, args) {
   if (tool === "figma.find") return find(args.query || "");
   if (tool === "figma.goto") return goTo(args.id);
   if (tool === "figma.point") return point(args.target);
+  if (tool === "figma.mark") return mark(args.marks || []);
+  if (tool === "figma.clear_marks") return clearMarks();
   if (tool === "figma.hide") {
     removePointer();
     return { ok: true };

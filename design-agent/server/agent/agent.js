@@ -113,6 +113,39 @@ const OPEN_SITES_TOOL = {
   },
 };
 
+const MARK_TOOL = {
+  name: "mark_issues",
+  description:
+    "Show your review findings ON the user's screen: draws a numbered, coloured box with a short label on each element or layer " +
+    "(UX = purple, UI = blue, Content = green) in Chrome or Figma. Use it whenever you review something or they ask what to correct: " +
+    "mark first, then talk through the findings in the same order ('Number 1, a UX issue: ...'). Replaces earlier marks. " +
+    "Use ids from your latest look (w12 on web pages, 12:34 in Figma). Doesn't change their design.",
+  parameters: {
+    type: "object",
+    properties: {
+      marks: {
+        type: "array",
+        description: "Most important first, usually 3 to 6",
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string", description: "Element id (w12) or Figma layer id (12:34)" },
+            kind: { type: "string", description: "ux (flow, clarity, usability, accessibility), ui (visual: spacing, alignment, type, colour, contrast) or content (copy, wording, spelling, tone)" },
+            note: { type: "string", description: "Short label, max about 8 words, e.g. 'CTA label is vague'" },
+          },
+          required: ["id", "kind", "note"],
+        },
+      },
+    },
+    required: ["marks"],
+  },
+};
+
+const CLEAR_MARKS_TOOL = {
+  name: "clear_marks",
+  description: "Remove your review marks from the screen (Chrome and Figma). Use when they ask to clear or hide the marks/notes.",
+};
+
 const LIST_SCREENSHOTS_TOOL = {
   name: "list_screenshots",
   description: "List the screenshots saved in the user's library (newest first): id, name, page address, when, and where each was put in Figma.",
@@ -187,6 +220,7 @@ export function createAgent({ broadcast, parts, captures }) {
     if (all || parts.connected("browser")) tools.push(WEB_TOOL, SCREENSHOT_TOOL);
     tools.push(SEARCH_TOOL, OPEN_SITES_TOOL, LIST_SCREENSHOTS_TOOL);
     if (all || parts.connected("figma")) tools.push(FIGMA_TOOL, FIND_TOOL, GOTO_TOOL, DESIGN_TOOL);
+    if (all || parts.connected("browser") || parts.connected("figma")) tools.push(MARK_TOOL, CLEAR_MARKS_TOOL);
     tools.push(CHANGE_TOOL, OPEN_FILE_TOOL); // changes can also be for a file that isn't open yet
     return tools;
   }
@@ -549,7 +583,51 @@ export function createAgent({ broadcast, parts, captures }) {
     }
   }
 
+  // The review marks on screen now, so "fix number 2" knows what number 2 is.
+  let lastMarks = [];
+
+  async function markIssues(marks) {
+    marks = (Array.isArray(marks) ? marks : []).slice(0, 12).map((m) => ({
+      id: String(m.id || "").trim(),
+      kind: ["ux", "ui", "content"].includes(String(m.kind || "").toLowerCase()) ? String(m.kind).toLowerCase() : "ux",
+      note: String(m.note || "").slice(0, 80),
+    }));
+    const web = marks.filter((m) => /^w\d/.test(m.id));
+    const fig = marks.filter((m) => !/^w\d/.test(m.id));
+    const result = { marked: 0, missing: [] };
+    // Numbers stay in the order given, even when marks are split between Chrome and Figma.
+    const keepNumbers = (list) => marks.map((m) => (list.includes(m) ? m : { id: "-", kind: m.kind, note: "" }));
+    try {
+      if (web.length && parts.connected("browser")) {
+        const r = await parts.call("browser", "page.call", { file: "marks.js", method: "mark", args: [keepNumbers(web)] }, 8000);
+        result.marked += (r && r.marked) || 0;
+      }
+      if (fig.length && parts.connected("figma")) {
+        const r = await parts.call("figma", "figma.mark", { marks: keepNumbers(fig) }, 10000);
+        result.marked += (r && r.marked) || 0;
+      }
+    } catch (error) {
+      return { error: `Couldn't draw the marks: ${error.message}` };
+    }
+    lastMarks = marks;
+    console.log(`  Marked ${result.marked} finding${result.marked === 1 ? "" : "s"} on screen.`);
+    return {
+      marked: result.marked,
+      numbers: marks.map((m, i) => `${i + 1} = ${m.id} (${m.kind.toUpperCase()}: ${m.note})`),
+      note: "Now say them in this order, briefly, pointing at each. If they ask to fix one or all, change it in Figma right away.",
+    };
+  }
+
+  function clearMarks() {
+    lastMarks = [];
+    if (parts.connected("browser")) parts.call("browser", "page.call", { file: "marks.js", method: "clearMarks", args: [] }, 5000).catch(() => {});
+    if (parts.connected("figma")) parts.call("figma", "figma.clear_marks", {}, 5000).catch(() => {});
+    return { cleared: true };
+  }
+
   async function runTool(call) {
+    if (call.name === "mark_issues") return { response: await markIssues((call.args || {}).marks), extra: [] };
+    if (call.name === "clear_marks") return { response: clearMarks(), extra: [] };
     if (call.name === "look_at_webpage" || call.name === "look_at_figma") {
       const [description, ...images] = call.name === "look_at_figma" ? await lookAtFigma() : await lookAtWebpage();
       return { response: { result: description.text }, extra: images };
@@ -805,6 +883,9 @@ export function createAgent({ broadcast, parts, captures }) {
     try {
       // OBSERVE: if the question is about the screen, look first.
       const userParts = [{ text: promptText }, ...extraParts];
+      if (lastMarks.length) {
+        userParts.push({ text: `[Review marks on the user's screen now: ${lastMarks.map((m, i) => `${i + 1} = ${m.id} (${m.kind.toUpperCase()}: ${m.note})`).join("; ")}]` });
+      }
       // Just "take a screenshot" doesn't need a look first (it's quicker without).
       const onlyCapture = /\b(take|grab|capture|get|make)\b[^.?]*\bscreen ?shot\b/i.test(promptText) && !/\?/.test(promptText);
       const surface = observe && !onlyCapture && ABOUT_SCREEN.test(promptText) ? surfaceFor(promptText) : null;
